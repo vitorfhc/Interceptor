@@ -1,30 +1,102 @@
-# Interceptor
+<p align="center">
+  <img src="docs/assets/interceptor-logo-square.png" alt="Interceptor logo" width="180">
+</p>
 
-**Interceptor lets AI agents use your real browser like a human would.**
+<h1 align="center">Interceptor</h1>
 
-It gives agents human-style control of your existing browser session so they can read pages, click, type, navigate, observe what a site is doing underneath, and learn repeatable workflows on the live web without starting from a separate automated browser.
+<p align="center">
+  <strong>AI agents use your real browser and macOS apps like a human would.</strong>
+</p>
 
-**Interceptor** is a browser tool built from frustration.
+<p align="center">
+  No CDP. No separate automated browser. No starting from zero.
+</p>
 
-Every browser automation framework talks to Chrome through the DevTools Protocol, and every site that cares can see it. Your agent gets detected. Your session gets blocked. You're running a separate browser instance that doesn't have your cookies, your logins, your context. You start from zero every time.
+<p align="center">
+  <a href="https://github.com/Hacker-Valley-Media/Interceptor/releases/download/v0.8.0/Interceptor-v0.8.0-macOS.dmg"><strong>Download macOS DMG</strong></a>
+  ·
+  <a href="#quick-start"><strong>Quick Start</strong></a>
+  ·
+  <a href="ARCHITECTURE.md"><strong>Architecture</strong></a>
+  ·
+  <a href="use-cases/"><strong>Use Cases</strong></a>
+</p>
 
-Interceptor was built because clicking through 20 rows at a time on sites that refuse to give you your own data in bulk is a waste of your life. The goal: click through a workflow once and have your agent see everything. Not just the page, but the network requests underneath it. The API calls. The pagination parameters. The auth tokens. Then intercept those requests, rewrite them, and pull back everything at once.
+<p align="center">
+  <img src="https://img.shields.io/github/v/release/Hacker-Valley-Media/Interceptor?label=release" alt="Latest release">
+  <img src="https://img.shields.io/github/license/Hacker-Valley-Media/Interceptor" alt="License">
+  <img src="https://img.shields.io/badge/macOS-supported-black?logo=apple" alt="macOS supported">
+  <img src="https://img.shields.io/badge/Chrome%20%26%20Brave-supported-4285F4?logo=googlechrome" alt="Chrome and Brave supported">
+</p>
 
-But it goes further than extraction. The deeper goal is this: *teach the agent by showing it*. Record a session. Let the agent watch the clicks, the keystrokes, the DOM mutations, and the network calls each action triggered. Then hand it a replay script and say, "Now do this for me. Every time. Without asking."
+![Interceptor running cinematic overlays on top of a live website](docs/assets/interceptor-cook-mode.jpg)
 
-Interceptor doesn't use CDP. It doesn't launch a separate browser. It runs as a Chrome extension inside your actual browser. Your cookies, your sessions, your logins. It passes every major bot detection test. Sites don't know it's there.
+Interceptor gives agents human-style control of your existing browser session so they can read pages, click, type, navigate, observe what a site is doing underneath, and learn repeatable workflows on the live web without starting from a separate automated browser.
 
-It intercepts the DOM tree so your agent can read what's on the page. It intercepts network traffic so your agent can see the APIs behind the UI. It intercepts your workflows so your agent can learn what you do and repeat it without you.
+It runs as a Chrome extension inside your actual browser, not a separate automated instance. Your cookies, your sessions, your logins, and your context stay intact. The same CLI also extends to native macOS automation through `interceptor macos`.
 
-And now it does the same thing for macOS itself. `interceptor macos` gives agents structured accessibility trees, OS-level input, real-time speech recognition, on-device vision, sound classification, and system-wide event monitoring for native applications. The same CLI, the same ref system, the same teach-and-replay pattern -- extended from browser tabs to the entire desktop.
+The agent calls `interceptor` CLI commands, reads the output, and decides what to do next. No MCP required. No API keys required.
 
-No detection. No separate instance. No starting from zero. Your browser, your apps, your workflows -- intercepted and handed to the agent.
+> **Warning**
+> Interceptor gives agents real autonomy over your browser and apps. Treat it like an agent, not a toy script runner.
 
-**Interceptor uses extensive browser permissions and gives the agent real autonomy and agency. This isn't an assistant — it's an agent. It can act just like you. Use at your own risk and have a lot of fun!** 🔥
+## Why Teams Use Interceptor
 
----
+- **Your real browser session**: operate inside the browser you already use, with your cookies, logins, tabs, and context intact.
+- **Passive network visibility**: capture `fetch()` and `XMLHttpRequest` traffic without turning on the debugger or triggering an infobanner.
+- **Teach-and-replay workflows**: record real clicks, keystrokes, DOM changes, and correlated network calls, then export a replayable `interceptor` plan.
+- **Native macOS control**: inspect accessibility trees, click, type, capture speech, and monitor system-level activity through the same CLI.
+- **Built for hostile pages**: avoid the standard CDP-first footprint that gets separate automated browsers flagged or blocked.
 
-The agent calls `interceptor` CLI commands, reads the output, decides what to do next. No MCP, no API keys.
+## Why Interceptor Exists
+
+Most browser automation stacks start a separate browser and talk to it through DevTools. That is fine until the site notices, your authenticated context disappears, or your agent has to relearn a workflow from scratch.
+
+Interceptor was built from the opposite premise: use the browser and apps the human is already using, let the agent see what is really happening underneath, and make the workflow reusable after a single live walkthrough.
+
+## Why Interceptor Instead Of The Usual Stack?
+
+| Capability | Interceptor | Playwright / Puppeteer / CDP-first tooling |
+|---|---|---|
+| Uses your existing logged-in browser profile | Yes | Usually no |
+| Reads passive fetch/XHR traffic without debugger attachment | Yes | No |
+| Records real human sessions and exports replay plans | Yes | Not built in |
+| Extends the same CLI to native macOS apps | Yes | No |
+| Avoids a separate automated browser by default | Yes | No |
+
+## Demo Preview
+
+![Preview from the current Interceptor walkthrough](docs/assets/interceptor-demo-preview.jpg)
+
+The current walkthrough shows the packaged app, CLI flow, and live browser overlays working together in the same session.
+
+## Install In 60 Seconds
+
+If you just want the package install, start here:
+
+1. Download [`Interceptor-v0.8.0-macOS.dmg`](https://github.com/Hacker-Valley-Media/Interceptor/releases/download/v0.8.0/Interceptor-v0.8.0-macOS.dmg)
+2. Open the DMG and drag **Interceptor.app** into **Applications**
+3. Launch **Interceptor.app** from `/Applications`
+4. Pick your browser and profile in the first-launch flow
+5. Approve the helper in Login Items if macOS asks
+6. Grant Accessibility, Screen Recording, or Microphone as needed
+7. Run `interceptor status` to confirm the daemon, helper, and bridge are alive
+
+For the latest release page and notes, see [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest).
+
+## Quick Start
+
+```bash
+interceptor open "https://example.com"       # Open, wait, return tree + text (1 command)
+interceptor act e1                            # Click element, return updated tree + diff
+interceptor act e2 "hello world"              # Type into field, return updated tree
+interceptor read                              # Re-read current page (tree + text)
+interceptor inspect                           # Tree + text + network log + headers
+```
+
+Once installed, the daemon auto-starts on first command. No manual launch needed.
+
+The legacy individual commands (`interceptor tab new`, `interceptor tree`, `interceptor click`, etc.) still work, but the compound commands above are preferred — they reduce round-trips and agent deliberation time.
 
 ## Agent Instructions
 
@@ -32,7 +104,7 @@ The agent calls `interceptor` CLI commands, reads the output, decides what to do
 
 Shared repo-local skills live under [`.agents/skills/`](.agents/skills/). For cross-tool compatibility, [`.codex/skills`](.codex/skills), [`.claude/skills`](.claude/skills), and [`.gemini/skills`](.gemini/skills) all point at the same backing directory.
 
-## Installation
+## Detailed Installation
 
 ### Option 1: DMG Installer (Recommended)
 
@@ -224,20 +296,6 @@ For packaged installs, treat `interceptor macos trust` as a permission snapshot.
 Grant permissions in: System Settings → Privacy & Security → [Permission] → Interceptor
 
 ---
-
-## Quick Start
-
-```bash
-interceptor open "https://example.com"       # Open, wait, return tree + text (1 command)
-interceptor act e1                            # Click element, return updated tree + diff
-interceptor act e2 "hello world"              # Type into field, return updated tree
-interceptor read                              # Re-read current page (tree + text)
-interceptor inspect                           # Tree + text + network log + headers
-```
-
-Once installed, the daemon auto-starts on first command. No manual launch needed.
-
-The legacy individual commands (`interceptor tab new`, `interceptor tree`, `interceptor click`, etc.) still work, but the compound commands above are preferred — they reduce round-trips and agent deliberation time.
 
 ## Core Concepts
 
