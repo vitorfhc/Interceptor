@@ -7,6 +7,12 @@
 3. Use `interceptor act <ref>` or `interceptor act <ref> "<value>"`.
 4. Use `interceptor inspect` when the page is an SPA or hides the real data behind API calls.
 
+Before assuming browser control is available:
+
+- Run `interceptor status`.
+- If `tab_create` or `open` times out, confirm the browser is open with the Interceptor extension actually loaded in the active profile.
+- A healthy packaged install can still fail browser commands if the extension is missing or the wrong browser profile is active.
+
 ## Use the right read surface
 
 - Use `open`, `read`, and `inspect` first.

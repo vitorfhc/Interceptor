@@ -36,15 +36,25 @@ Shared repo-local skills live under [`.agents/skills/`](.agents/skills/). For cr
 
 ### Option 1: DMG Installer (Recommended)
 
-The simplest way to install Interceptor. Download the DMG, double-click the installer, pick your browser and profile — done.
+The standard Mac install path. The DMG contains `Interceptor.app` plus an `Applications` shortcut.
 
 1. Download the macOS DMG attached to the [latest release](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest)
-2. Open the DMG and double-click **Install Interceptor**
-3. Select your browser (Chrome or Brave)
-4. Select your profile (Default, or whichever you use)
-5. Click **Install** — the browser will close, install silently, and relaunch
+2. Open the DMG
+3. Drag **Interceptor.app** into **Applications**
+4. Launch **Interceptor.app** from `/Applications`
+5. Select your browser and profile in the first-launch setup flow
+6. Approve the background helper in Login Items if macOS asks
+7. Grant Accessibility / Screen Recording / Microphone as needed
 
-The installer copies binaries to `~/.interceptor/bin/`, injects the extension into your browser's Secure Preferences with valid HMAC signatures, and registers the native messaging host. No `chrome://extensions`, no developer mode, no manual steps.
+After the first install, Interceptor updates itself from the installed app bundle using Sparkle. The DMG is only for first install; the app owns subsequent updates.
+
+The installed app writes thin CLI wrappers into `~/.interceptor/bin/`, injects the extension into your selected browser profile, installs the native messaging host manifest for every installed supported Chromium-family browser root, and registers the bundled bridge helper from inside the app bundle. No `chrome://extensions`, no developer mode, no manual launch-agent plist management.
+
+To uninstall later:
+
+```bash
+bash scripts/uninstall.sh
+```
 
 #### Build the DMG yourself
 
@@ -79,7 +89,36 @@ This produces three artifacts:
 | Background daemon | `daemon/interceptor-daemon` |
 | Chrome extension | `extension/dist/` |
 
-#### Install the CLI
+#### Build the App Bundle / Package
+
+```bash
+bash scripts/build.sh
+bash scripts/build-app.sh
+```
+
+This produces:
+
+| Artifact | Path |
+|----------|------|
+| App bundle | `dist/Interceptor.app` |
+| CLI binary | `dist/interceptor` |
+| Background daemon | `daemon/interceptor-daemon` |
+| Setup helper | `dist/interceptor-setup` |
+| Chrome extension | `extension/dist/` |
+
+For local development outside `/Applications`, allow the app to bypass the install-location gate:
+
+```bash
+INTERCEPTOR_ALLOW_LOCAL_RUN=1 open dist/Interceptor.app
+```
+
+If you still need a signed installer package for internal/admin workflows, you can build it separately:
+
+```bash
+bash scripts/build-pkg.sh
+```
+
+#### Install the CLI Only
 
 Add the binary to your PATH:
 
@@ -124,9 +163,30 @@ bash scripts/build.sh # Build compiled host binaries and extension bundles
 - Run `bash scripts/build.sh` when you need to verify the actual host binaries and extension bundles still compile.
 - For changes that affect browser behavior or shared infrastructure, run all three.
 
-## macOS Bridge (optional)
+## Sparkle Release Assets
 
-The macOS bridge (`interceptor-bridge`) extends interceptor with native macOS control — accessibility trees, screen capture, speech recognition, vision, NLP, and more. It gives agents the same depth of control over macOS applications that interceptor gives over the browser.
+The app-level updater expects:
+
+- `appcast.xml` at the URL configured in `sparkle/feed-url.txt`
+- versioned update archives under `updates/`
+
+Generate the updater artifacts locally with:
+
+```bash
+bash scripts/setup-sparkle-keys.sh          # first time only
+bash scripts/build-sparkle-artifacts.sh
+```
+
+This writes:
+
+- `appcast.xml`
+- `updates/Interceptor-<version>.zip`
+- `dist/sparkle/appcast.xml`
+- `dist/sparkle/Interceptor-<version>.zip`
+
+## macOS Bridge (development)
+
+The packaged install flow now ships the bridge helper inside `Interceptor.app` and registers it from the app bundle. The standalone `interceptor-bridge` path below is retained for development and low-level debugging only.
 
 ### Quick Install (pre-built, signed & notarized)
 
@@ -134,7 +194,7 @@ The macOS bridge (`interceptor-bridge`) extends interceptor with native macOS co
 bash scripts/install-bridge.sh
 ```
 
-Downloads the latest signed binary from GitHub Releases, verifies the code signature, and installs it. No Xcode required.
+Downloads the latest signed binary from GitHub Releases, verifies the code signature, and installs it as a standalone debug bridge. This is no longer required for the standard package install.
 
 ### Build From Source (requires Xcode)
 
@@ -143,7 +203,7 @@ bash scripts/build-bridge.sh
 bash scripts/install-bridge.sh --local
 ```
 
-Requires full Xcode (not just Command Line Tools) — the bridge links 12 Apple frameworks including ScreenCaptureKit, Speech, Vision, and NaturalLanguage.
+Requires full Xcode (not just Command Line Tools) — the bridge links Apple frameworks including ScreenCaptureKit, Speech, Vision, and NaturalLanguage.
 
 ### Permissions
 
@@ -153,13 +213,15 @@ After installing, check and grant required permissions:
 interceptor macos trust
 ```
 
+For packaged installs, treat `interceptor macos trust` as a permission snapshot. Use `interceptor status` to confirm the daemon, helper, and bridge socket are actually alive before debugging native runtime failures.
+
 | Permission | Required | What It Enables |
 |-----------|----------|-----------------|
 | Accessibility | Yes | UI element inspection, clicking, typing, window management |
 | Screen Recording | No | Screenshots, screen capture, vision analysis |
 | Microphone | No | Speech recognition, voice activity detection |
 
-Grant permissions in: System Settings → Privacy & Security → [Permission] → interceptor-bridge
+Grant permissions in: System Settings → Privacy & Security → [Permission] → Interceptor
 
 ---
 
@@ -579,7 +641,7 @@ interceptor canvas diff url1.png url2.png     # Pixel diff between images
 
 ### How It Works
 
-A Swift native bridge (`interceptor-bridge`) runs as a LaunchAgent alongside the daemon. The daemon routes `macos_` commands to the bridge over Unix socket. Same CLI binary, same wire format, same ref convention (`e1`, `e2`, ...).
+A bundled `Interceptor.app` runs as a LaunchAgent and contains the macOS bridge, daemon, and CLI in one app bundle. The daemon routes `macos_` commands to the bridge over Unix socket. Same CLI binary, same wire format, same ref convention (`e1`, `e2`, ...).
 
 ```
 CLI ──unix──▸ Daemon ──native-msg──▸ Chrome Extension (web commands)
@@ -658,6 +720,8 @@ interceptor macos stream frame                   # Latest frame as JPEG data URL
 
 ```bash
 interceptor macos trust                          # Check all permissions with exact System Settings paths
+interceptor macos trust --prompt                 # Ask macOS to register Interceptor in Accessibility
+interceptor macos trust --walkthrough            # Prompt + open the next relevant Privacy pane
 ```
 
 | Permission | Required | Enables |

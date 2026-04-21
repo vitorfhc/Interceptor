@@ -5,6 +5,9 @@
  * that get routed to the native bridge via the daemon.
  */
 
+import { spawnSync } from "node:child_process"
+import { existsSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
 import { sendCommand, sendCommandWs, type DaemonResponse } from "../transport"
 
 type Action = { type: string; [key: string]: unknown }
@@ -29,10 +32,67 @@ async function send(
   }
 }
 
+function findInterceptorAppExecutable(): string | null {
+  const exePath = resolve(process.execPath || process.argv[0] || "")
+  const exeDir = dirname(exePath)
+  const home = process.env.HOME || ""
+  const candidates = [
+    join(exeDir, "..", "..", "MacOS", "Interceptor"),
+    resolve("dist", "Interceptor.app", "Contents", "MacOS", "Interceptor"),
+    "/Applications/Interceptor.app/Contents/MacOS/Interceptor",
+    join(home, "Applications", "Interceptor.app", "Contents", "MacOS", "Interceptor"),
+  ]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+function maybeRunPackagedTrustCommand(filtered: string[], jsonMode = false): boolean {
+  if (filtered[1] !== "trust") return false
+
+  const appExecutable = findInterceptorAppExecutable()
+  if (!appExecutable) return false
+
+  const hasPromptFlags = filtered.includes("--prompt")
+    || filtered.includes("--walkthrough")
+    || filtered.includes("--accessibility-prompt")
+    || filtered.includes("--screen-prompt")
+    || filtered.includes("--microphone-prompt")
+
+  const args = hasPromptFlags
+    ? ["request-trust", ...filtered.slice(2)]
+    : ["trust-status"]
+
+  const result = spawnSync(appExecutable, args, { encoding: "utf8" })
+  if (result.status !== 0) {
+    console.error("error:", result.stderr.trim() || result.stdout.trim() || "packaged trust command failed")
+    process.exit(1)
+  }
+
+  const stdout = result.stdout.trim()
+  if (!stdout) {
+    console.log(jsonMode ? "{}" : "ok")
+    return true
+  }
+
+  try {
+    const payload = JSON.parse(stdout)
+    console.log(JSON.stringify(payload, null, 2))
+  } catch {
+    console.log(stdout)
+  }
+  return true
+}
+
 export async function runMacosCommand(
   filtered: string[],
   opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number }
 ): Promise<void> {
+  if (maybeRunPackagedTrustCommand(filtered, opts.jsonMode)) {
+    return
+  }
+
   const action = parseMacosCommand(filtered)
   if (!action) process.exit(1)
 
@@ -134,7 +194,14 @@ export function parseMacosCommand(filtered: string[]): Action | null {
 
     // ── Trust ──
     case "trust":
-      return { type: "macos_trust" }
+      return {
+        type: "macos_trust",
+        prompt: filtered.includes("--prompt") || filtered.includes("--walkthrough"),
+        walkthrough: filtered.includes("--walkthrough"),
+        accessibilityPrompt: filtered.includes("--accessibility-prompt"),
+        screenPrompt: filtered.includes("--screen-prompt"),
+        microphonePrompt: filtered.includes("--microphone-prompt"),
+      }
 
     // ── Apps ──
     case "apps":

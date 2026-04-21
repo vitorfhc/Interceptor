@@ -21,6 +21,10 @@ interceptor macos inspect
 
 - Run `interceptor macos trust` when the task depends on Accessibility, Screen Recording, or Microphone access.
 - Expect screenshots, streaming, speech recognition, OCR, and sound classification to fail or degrade when permissions are missing.
+- Treat `interceptor macos trust` as a permission snapshot, not a full runtime-health check.
+- For packaged installs, also run `interceptor status` to confirm the bundled helper is enabled and the bridge socket is live.
+- For microphone-sensitive workflows, verify the live path with `interceptor macos audio input start` and `interceptor macos audio input stop` after trust looks good.
+- If `interceptor macos *` reports `Interceptor bridge not running` or `connection closed before response`, the helper lifecycle is still unhealthy even if `trust` says permissions are granted.
 
 ## Use the native-only capabilities deliberately
 
@@ -32,3 +36,8 @@ interceptor macos inspect
 
 - Use browser `interceptor` commands for web content.
 - Use `interceptor macos` for native apps, browser chrome, OS dialogs, or trusted input that must bypass DOM simulation.
+
+## Packaged-install notes
+
+- The shipped app now owns helper registration and privacy onboarding from `/Applications/Interceptor.app`.
+- `interceptor macos trust` in a packaged install should be interpreted as app-owned trust state, not as proof that a shell-launched probe or a live bridge action will succeed.

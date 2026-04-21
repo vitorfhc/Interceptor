@@ -94,8 +94,9 @@ signal(SIGTERM) { _ in
     exit(0)
 }
 
-// NSApplication is required for NSEvent.addGlobalMonitorForEvents (MonitorDomain)
-// Using NSApplication.shared.run() instead of RunLoop.main.run()
+// AppKit initialization is required for APIs like NSEvent global monitors, but
+// NSApplication.run() exits immediately in our helper context. Keep the helper
+// resident on the main run loop instead.
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory) // No dock icon, no menu bar
-app.run()
+RunLoop.main.run()

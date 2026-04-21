@@ -101,7 +101,7 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
             } catch {
                 let errMsg = error.localizedDescription
                 if errMsg.contains("3801") || errMsg.contains("declined") {
-                    completion(WireFormat.error("Screen Recording permission required: System Settings → Privacy & Security → Screen Recording → Enable interceptor-bridge"))
+                    completion(WireFormat.error("Screen Recording permission required: System Settings → Privacy & Security → Screen Recording → Enable Interceptor"))
                 } else {
                     completion(WireFormat.error("screenshot failed: \(errMsg)"))
                 }

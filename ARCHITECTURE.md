@@ -35,6 +35,13 @@ This document describes the live architecture as of the current monitor, CSP-fal
 - **Extension** is an MV3 service worker plus content scripts + a MAIN-world inject script. It owns DOM capture, ref assignment, monitor session in-memory state, network monkey-patching, and scene-graph access for rich editors.
 - **Bridge** is a Swift LaunchAgent-style daemon that exposes macOS-native capabilities (AX tree, CGEvent input, ScreenCaptureKit, AVFoundation audio, Vision/NLP frameworks).
 
+### Packaged macOS distribution
+
+- The public macOS artifact is a signed/notarized DMG that stages `Interceptor.app`, an `Applications` symlink, and an uninstall command.
+- `Interceptor.app` bundles the host app, CLI, daemon, bridge, setup helper, extension payload, LaunchAgent plist, and Sparkle updater framework.
+- First launch from `/Applications` completes browser/profile onboarding, writes `~/.interceptor/bin` wrappers, registers the bundled helper via `SMAppService`, and installs the native messaging host manifest into every installed supported Chromium-family browser root.
+- `interceptor macos trust` is an app-owned permission snapshot. Runtime health still depends on the daemon/bridge path exposed by `interceptor status`.
+
 ---
 
 ## Monitor Subsystem

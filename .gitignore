@@ -1,4 +1,6 @@
 node_modules/
+.build/
+.claude/worktrees/
 dist/
 extension/dist/
 daemon/interceptor-daemon
@@ -15,7 +17,12 @@ prd/
 scripts/auto-improve/
 signing.env
 notarization.env
+appcast.xml
+sparkle/
+updates/
 interceptor-bridge/.build/
+installer-app/.build/
+interceptor-app/.build/
 keys/
 /.vscode/
 /Auto\ Run\ Docs/

@@ -1,0 +1,20 @@
+#!/bin/bash
+set -euo pipefail
+
+APP_PATH="/Applications/Interceptor.app"
+
+if [[ ! -d "$APP_PATH" ]]; then
+  exit 0
+fi
+
+CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+CONSOLE_UID="$(stat -f '%u' /dev/console 2>/dev/null || true)"
+
+if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" && -n "$CONSOLE_UID" ]]; then
+  (
+    sleep 1
+    /bin/launchctl asuser "$CONSOLE_UID" /usr/bin/open -a "$APP_PATH" >/dev/null 2>&1 || true
+  ) &
+fi
+
+exit 0

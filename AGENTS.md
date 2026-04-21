@@ -8,6 +8,8 @@ For implementation details, see [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Working Rules
 
 - Prefer `./dist/interceptor ...` when working inside this repo and the binary is not on `PATH`.
+- The shipped macOS flow is drag `Interceptor.app` into `/Applications`, then finish setup inside the app.
+- For packaged validation, check `interceptor status` as well as `interceptor macos trust`; trust is a permission snapshot, status confirms daemon/bridge/helper health.
 - Prefer Interceptor compound commands first: `open`, `read`, `act`, `inspect`.
 - Prefer structured read surfaces over screenshots unless pixels are the task.
 - Treat `eN` refs as short-lived and recover with `read` or `find` after DOM changes.

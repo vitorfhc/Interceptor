@@ -1,5 +1,6 @@
 import { unlinkSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "node:fs"
 import { execSync, spawn } from "node:child_process"
+import { dirname, join, resolve } from "node:path"
 import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-loader"
 import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, transportLabel } from "../shared/platform"
 import {
@@ -43,10 +44,20 @@ function isBridgeAlive(): boolean {
 function spawnBridge(): void {
   if (bridgeSpawnAttempted) return
   bridgeSpawnAttempted = true
+  const execPath = resolve(process.execPath || process.argv[0] || "")
+  const execDir = dirname(execPath)
+  const bundledBridge = join(execDir, "..", "..", "MacOS", "InterceptorBridge")
   const bridgeBin = new URL("../interceptor-bridge/.build/debug/interceptor-bridge", import.meta.url).pathname
   const releaseBin = new URL("../interceptor-bridge/.build/release/interceptor-bridge", import.meta.url).pathname
   const distBin = new URL("../dist/interceptor-bridge", import.meta.url).pathname
   let bin = ""
+  // In packaged app installs, the bridge is expected to be launched and
+  // supervised by SMAppService/launchd. Keep direct spawn for repo/dev layouts.
+  if (existsSync(bundledBridge)) {
+    log("bridge helper missing socket inside app bundle — waiting for SMAppService registration or approval")
+    bridgeSpawnAttempted = false
+    return
+  }
   if (existsSync(distBin)) bin = distBin
   else if (existsSync(releaseBin)) bin = releaseBin
   else if (existsSync(bridgeBin)) bin = bridgeBin
@@ -827,7 +838,7 @@ try {
                 if (connected && bridgeSocket) {
                   sendToBridge(id, action, socket, actionType)
                 } else {
-                  socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: "interceptor-bridge not running. Start it with: interceptor-bridge or grant Accessibility permission." } }))
+                  socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: "Interceptor bridge not running. Open Interceptor.app to complete helper approval or privacy setup." } }))
                 }
               })
             }

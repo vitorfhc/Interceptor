@@ -2,52 +2,163 @@
 set -euo pipefail
 
 # ── Interceptor Installer ──────────────────────────────────────────────────────
-# Native macOS dialogs via osascript. Two questions, then magic.
-# Packaged inside the DMG alongside the Interceptor binary.
+# Native macOS dialogs via osascript. Installs a real Interceptor.app bundle
+# that contains the CLI, daemon, and bridge in one place.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INJECT="$ROOT/scripts/inject.py"
 EXT_SRC="$ROOT/extension/dist"
-DAEMON_SRC="$ROOT/daemon/interceptor-daemon"
-CLI_SRC="$ROOT/dist/interceptor"
-BRIDGE_SRC="$ROOT/dist/interceptor-bridge"
+RUNTIME_APP_SRC="$ROOT/Interceptor.app"
 PLIST_SRC="$ROOT/launch/com.interceptor.bridge.plist"
 
-# ── Copy binaries to persistent location ──────────────────────────────────────
 INSTALL_DIR="$HOME/.interceptor"
-mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/launch"
-cp -f "$DAEMON_SRC" "$INSTALL_DIR/bin/interceptor-daemon"
-chmod +x "$INSTALL_DIR/bin/interceptor-daemon"
-if [[ -f "$CLI_SRC" ]]; then
-  cp -f "$CLI_SRC" "$INSTALL_DIR/bin/interceptor"
-  chmod +x "$INSTALL_DIR/bin/interceptor"
-fi
-DAEMON="$INSTALL_DIR/bin/interceptor-daemon"
-
-# ── PRD-35: install the macOS bridge + LaunchAgent ───────────────────────────
-# The bridge powers all 'interceptor macos *' commands (AX tree, CGEvent input,
-# screenshots, vision/NLP). Without it, half the product is silently inert.
-BRIDGE_INSTALLED=0
-if [[ -f "$BRIDGE_SRC" ]]; then
-  cp -f "$BRIDGE_SRC" "$INSTALL_DIR/bin/interceptor-bridge"
-  chmod +x "$INSTALL_DIR/bin/interceptor-bridge"
-  BRIDGE_INSTALLED=1
-fi
-
-# LaunchAgent makes the bridge auto-start at login and respawn on crash.
-# The plist in-tree points at /usr/local/bin/interceptor-bridge — rewrite it
-# to point at the user's install path.
+APP_INSTALL_DIR="$HOME/Applications"
+APP_DEST="$APP_INSTALL_DIR/Interceptor.app"
+APP_BRIDGE="$APP_DEST/Contents/MacOS/Interceptor"
+APP_CLI="$APP_DEST/Contents/Resources/bin/interceptor"
+APP_DAEMON="$APP_DEST/Contents/Resources/bin/interceptor-daemon"
+WRAPPER_DIR="$INSTALL_DIR/bin"
 PLIST_DST="$HOME/Library/LaunchAgents/com.interceptor.bridge.plist"
-if [[ "$BRIDGE_INSTALLED" == "1" && -f "$PLIST_SRC" ]]; then
-  mkdir -p "$HOME/Library/LaunchAgents"
-  sed "s|/usr/local/bin/interceptor-bridge|$INSTALL_DIR/bin/interceptor-bridge|g" \
-    "$PLIST_SRC" > "$INSTALL_DIR/launch/com.interceptor.bridge.plist"
-  cp -f "$INSTALL_DIR/launch/com.interceptor.bridge.plist" "$PLIST_DST"
 
-  # Unload any previous instance (idempotent on re-install), then load.
-  launchctl unload "$PLIST_DST" 2>/dev/null || true
-  launchctl load "$PLIST_DST" 2>/dev/null || true
-fi
+create_wrapper() {
+  local dst="$1"
+  local target="$2"
+  cat > "$dst" <<EOF
+#!/bin/bash
+exec "$target" "\$@"
+EOF
+  chmod +x "$dst"
+}
+
+wait_for_bridge() {
+  for _ in {1..15}; do
+    if [[ -S "/tmp/interceptor-bridge.sock" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+trust_field() {
+  local field="$1"
+  local json="$2"
+  python3 - "$field" <<'PY' <<< "$json"
+import json, sys
+
+field = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+    value = data.get("data", {}).get(field)
+    if isinstance(value, bool):
+        print("true" if value else "false")
+    elif value is None:
+        print("unknown")
+    else:
+        print(str(value).lower())
+except Exception:
+    print("unknown")
+PY
+}
+
+run_permission_walkthrough() {
+  if ! wait_for_bridge; then
+    return 0
+  fi
+
+  local trust_json access screen mic choice msg
+
+  while true; do
+    trust_json=$("$APP_CLI" macos trust --json 2>/dev/null || printf '{}')
+    access=$(trust_field "accessibility" "$trust_json")
+    if [[ "$access" == "true" ]]; then
+      break
+    fi
+
+    msg="Step 1 of 3 — Accessibility
+
+Interceptor needs Accessibility to:
+• inspect the AX tree
+• send trusted clicks and typing
+• manage native windows
+
+Click Grant Accessibility to have macOS register Interceptor and open the Accessibility pane. After enabling it, click Re-check."
+    choice=$(osascript -e "display dialog \"$msg\" buttons {\"Later\", \"Grant Accessibility\", \"Re-check\"} default button \"Grant Accessibility\" with title \"Interceptor Setup\"" 2>/dev/null | sed 's/button returned://')
+    case "$choice" in
+      "Grant Accessibility")
+        "$APP_CLI" macos trust --accessibility-prompt --json >/dev/null 2>&1 || true
+        open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null || true
+        ;;
+      "Re-check") ;;
+      *) return 0 ;;
+    esac
+  done
+
+  while true; do
+    trust_json=$("$APP_CLI" macos trust --json 2>/dev/null || printf '{}')
+    screen=$(trust_field "screenRecording" "$trust_json")
+    if [[ "$screen" == "true" ]]; then
+      break
+    fi
+
+    msg="Step 2 of 3 — Screen Recording
+
+Interceptor uses Screen Recording for:
+• screenshots
+• OCR and Vision APIs
+• visual capture features
+
+Click Grant Screen Recording to show the macOS prompt. If macOS sends you to System Settings, enable Interceptor there, then click Re-check."
+    choice=$(osascript -e "display dialog \"$msg\" buttons {\"Skip for Now\", \"Grant Screen Recording\", \"Re-check\"} default button \"Grant Screen Recording\" with title \"Interceptor Setup\"" 2>/dev/null | sed 's/button returned://')
+    case "$choice" in
+      "Grant Screen Recording")
+        "$APP_CLI" macos trust --screen-prompt --json >/dev/null 2>&1 || true
+        open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture" 2>/dev/null || true
+        ;;
+      "Re-check") ;;
+      *) break ;;
+    esac
+  done
+
+  while true; do
+    trust_json=$("$APP_CLI" macos trust --json 2>/dev/null || printf '{}')
+    mic=$(trust_field "microphone" "$trust_json")
+    if [[ "$mic" == "true" || "$mic" == "false" ]]; then
+      break
+    fi
+
+    msg="Step 3 of 3 — Microphone (Optional)
+
+Interceptor can use the microphone for:
+• speech recognition
+• voice activity detection
+
+Click Grant Microphone if you want those features now, or Skip for Now to finish."
+    choice=$(osascript -e "display dialog \"$msg\" buttons {\"Skip for Now\", \"Grant Microphone\"} default button \"Grant Microphone\" with title \"Interceptor Setup\"" 2>/dev/null | sed 's/button returned://')
+    case "$choice" in
+      "Grant Microphone")
+        "$APP_CLI" macos trust --microphone-prompt --json >/dev/null 2>&1 || true
+        ;;
+      *) break ;;
+    esac
+  done
+
+  trust_json=$("$APP_CLI" macos trust --json 2>/dev/null || printf '{}')
+  access=$(trust_field "accessibility" "$trust_json")
+  screen=$(trust_field "screenRecording" "$trust_json")
+  mic=$(trust_field "microphone" "$trust_json")
+
+  msg="Setup complete.
+
+Current permission state:
+• Accessibility: $access
+• Screen Recording: $screen
+• Microphone: $mic
+
+You can revisit this any time with:
+interceptor macos trust --walkthrough"
+  osascript -e "display dialog \"$msg\" buttons {\"Done\"} default button \"Done\" with title \"Interceptor Setup\"" 2>/dev/null || true
+}
 
 # ── Sanity checks ─────────────────────────────────────────────────────────────
 if [[ ! -f "$INJECT" ]]; then
@@ -58,6 +169,35 @@ if [[ ! -d "$EXT_SRC" ]]; then
   osascript -e 'display alert "Interceptor" message "Extension files not found. Broken package." as critical'
   exit 1
 fi
+if [[ ! -d "$RUNTIME_APP_SRC" ]]; then
+  osascript -e 'display alert "Interceptor" message "Interceptor.app not found in the package. Broken installer." as critical'
+  exit 1
+fi
+
+mkdir -p "$WRAPPER_DIR" "$INSTALL_DIR/launch" "$APP_INSTALL_DIR"
+
+# ── Install Interceptor.app + wrappers ────────────────────────────────────────
+launchctl unload "$PLIST_DST" 2>/dev/null || true
+pkill -f "/Interceptor.app/Contents/MacOS/Interceptor" 2>/dev/null || true
+
+rm -rf "$APP_DEST"
+ditto "$RUNTIME_APP_SRC" "$APP_DEST"
+chmod +x "$APP_BRIDGE" "$APP_CLI" "$APP_DAEMON"
+
+create_wrapper "$WRAPPER_DIR/interceptor" "$APP_CLI"
+create_wrapper "$WRAPPER_DIR/interceptor-daemon" "$APP_DAEMON"
+create_wrapper "$WRAPPER_DIR/interceptor-bridge" "$APP_BRIDGE"
+
+if [[ -f "$PLIST_SRC" ]]; then
+  mkdir -p "$HOME/Library/LaunchAgents"
+  sed "s|/usr/local/bin/interceptor-bridge|$APP_BRIDGE|g" \
+    "$PLIST_SRC" > "$INSTALL_DIR/launch/com.interceptor.bridge.plist"
+  cp -f "$INSTALL_DIR/launch/com.interceptor.bridge.plist" "$PLIST_DST"
+  launchctl load "$PLIST_DST" 2>/dev/null || true
+fi
+
+DAEMON="$APP_DAEMON"
+BRIDGE_INSTALLED=1
 
 # ── Question 1: Which browser? ────────────────────────────────────────────────
 BROWSERS=()
@@ -80,7 +220,6 @@ if [[ ${#BROWSERS[@]} -eq 1 ]]; then
   BROWSER="${BROWSERS[0]}"
   BROWSER_LABEL="${BROWSER_LABELS[0]}"
 else
-  # Build the list string for osascript
   LIST_STR=$(printf '"%s", ' "${BROWSER_LABELS[@]}")
   LIST_STR="{${LIST_STR%, }}"
   CHOSEN=$(osascript -e "choose from list ${LIST_STR} with title \"Interceptor\" with prompt \"Select your browser:\" default items {\"${BROWSER_LABELS[0]}\"}" 2>/dev/null)
@@ -97,7 +236,6 @@ else
 fi
 
 # ── Question 2: Which profile? ────────────────────────────────────────────────
-# Get profiles from inject.py
 PROFILE_DATA=$(python3 "$INJECT" --browser "$BROWSER" --profile dummy --extension-src "$EXT_SRC" --daemon-path "$DAEMON" --list-profiles 2>/dev/null || true)
 
 if [[ -z "$PROFILE_DATA" ]]; then
@@ -105,7 +243,6 @@ if [[ -z "$PROFILE_DATA" ]]; then
   exit 1
 fi
 
-# Parse profiles into arrays
 PROFILE_DIRS=()
 PROFILE_NAMES=()
 while IFS=$'\t' read -r dir name; do
@@ -122,14 +259,12 @@ if [[ ${#PROFILE_DIRS[@]} -eq 1 ]]; then
   PROFILE_DIR="${PROFILE_DIRS[0]}"
   PROFILE_NAME="${PROFILE_NAMES[0]}"
 else
-  # Show profile picker with display names
   DISPLAY_LIST=$(printf '"%s", ' "${PROFILE_NAMES[@]}")
   DISPLAY_LIST="{${DISPLAY_LIST%, }}"
   CHOSEN_PROFILE=$(osascript -e "choose from list ${DISPLAY_LIST} with title \"Interceptor\" with prompt \"Select profile for $BROWSER_LABEL:\" default items {\"${PROFILE_NAMES[0]}\"}" 2>/dev/null)
   if [[ "$CHOSEN_PROFILE" == "false" || -z "$CHOSEN_PROFILE" ]]; then
     exit 0
   fi
-  # Map display name back to directory
   PROFILE_DIR=""
   PROFILE_NAME="$CHOSEN_PROFILE"
   for i in "${!PROFILE_NAMES[@]}"; do
@@ -150,7 +285,6 @@ case "$BROWSER" in
   chrome) BROWSER_BIN="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ;;
 esac
 
-# Always show confirmation before proceeding
 if pgrep -f "$BROWSER_BIN" >/dev/null 2>&1; then
   CONFIRM_MSG="$BROWSER_LABEL is currently open and needs to close for installation. Save any work, then click Install to continue."
 else
@@ -162,10 +296,9 @@ if [[ "$ANSWER" != "Install" ]]; then
   exit 0
 fi
 
-# Quit browser if running
 if pgrep -f "$BROWSER_BIN" >/dev/null 2>&1; then
   osascript -e "tell application \"$BROWSER_LABEL\" to quit" 2>/dev/null || true
-  for i in {1..15}; do
+  for _ in {1..15}; do
     if ! pgrep -f "$BROWSER_BIN" >/dev/null 2>&1; then break; fi
     sleep 1
   done
@@ -176,10 +309,8 @@ if pgrep -f "$BROWSER_BIN" >/dev/null 2>&1; then
 fi
 
 # ── Install with progress ─────────────────────────────────────────────────────
-# Show a notification that install is in progress
 osascript -e 'display notification "Installing Interceptor extension..." with title "Interceptor"' 2>/dev/null || true
 
-# Run injection
 RESULT=$(python3 "$INJECT" \
   --browser "$BROWSER" \
   --profile "$PROFILE_DIR" \
@@ -191,7 +322,6 @@ if [[ "$RESULT" != "ok" ]]; then
   exit 1
 fi
 
-# ── Launch browser ────────────────────────────────────────────────────────────
 case "$BROWSER" in
   brave)  open -a "Brave Browser" ;;
   chrome) open -a "Google Chrome" ;;
@@ -199,25 +329,8 @@ esac
 
 osascript -e 'display notification "Interceptor installed successfully! Your browser is starting." with title "Interceptor" sound name "Glass"' 2>/dev/null || true
 
-# ── PRD-35: first-run macOS permission walkthrough ────────────────────────────
-# The bridge needs three Privacy toggles to do its job. Point the user there
-# explicitly — otherwise they see "error: interceptor-bridge not running" the
-# first time they run an `interceptor macos *` command.
 if [[ "$BRIDGE_INSTALLED" == "1" ]]; then
-  WALK_MSG="Interceptor can now control your Mac, not just the browser.
-
-To enable that, grant these three permissions to interceptor-bridge in System Settings → Privacy & Security:
-
-• Accessibility — AX tree + OS-level clicks & keys
-• Input Monitoring — trusted keyboard/mouse input
-• Screen Recording — screenshots, OCR, Vision APIs
-
-Click Open to jump to Privacy & Security now."
-
-  CHOICE=$(osascript -e "display dialog \"$WALK_MSG\" buttons {\"Later\", \"Open\"} default button \"Open\" with title \"Interceptor — macOS Permissions\"" 2>/dev/null | sed 's/button returned://')
-  if [[ "$CHOICE" == "Open" ]]; then
-    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null || true
-  fi
+  run_permission_walkthrough
 fi
 
 exit 0

@@ -4,10 +4,8 @@
 <dict>
     <key>Label</key>
     <string>com.interceptor.bridge</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/interceptor-bridge</string>
-    </array>
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/InterceptorBridge</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

@@ -24,7 +24,6 @@ EXPECTED_TEAM="REDACTED_TEAM_ID"
 EXPECTED_AUTHORITY="Developer ID Application: REDACTED_ORG"
 
 PLIST_NAME="com.interceptor.bridge"
-PLIST_SRC="$BRIDGE_DIR/$PLIST_NAME.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 BINARY_DST="/usr/local/bin/interceptor-bridge"
 
@@ -172,18 +171,40 @@ echo "==> Installing binary to $BINARY_DST..."
 cp "$BINARY_SRC" "$BINARY_DST"
 chmod +x "$BINARY_DST"
 
-# Copy plist (if available)
-if [ -f "$PLIST_SRC" ]; then
-  echo "==> Installing LaunchAgent plist..."
-  mkdir -p "$HOME/Library/LaunchAgents"
-  cp "$PLIST_SRC" "$PLIST_DST"
+# Create a standalone LaunchAgent plist. The bundled app install path uses a
+# different plist shape (`BundleProgram`) and is handled by SMAppService.
+echo "==> Installing LaunchAgent plist..."
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$PLIST_DST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$PLIST_NAME</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$BINARY_DST</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/interceptor-bridge.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/interceptor-bridge.stderr.log</string>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>
+PLIST
 
-  echo "==> Loading LaunchAgent..."
-  launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
-else
-  echo "==> No LaunchAgent plist found at $PLIST_SRC — skipping auto-start setup."
-  echo "    The daemon will auto-spawn the bridge on first interceptor macos command."
-fi
+echo "==> Loading LaunchAgent..."
+launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
 
 # ── Success ─────────────────────────────────────────────────────────────────
 
