@@ -66,9 +66,9 @@ Interceptor was built from the opposite premise: use the browser and apps the hu
 
 ## Demo Preview
 
-![Preview from the current Interceptor walkthrough](docs/assets/interceptor-demo-preview.jpg)
+[![Preview from the current Interceptor walkthrough](docs/assets/interceptor-demo-preview.jpg)](docs/assets/interceptor-walkthrough-720p.mp4)
 
-The current walkthrough shows the CLI flow and live browser overlays working together in the same session.
+Click the preview to watch the current walkthrough. It shows the CLI flow and live browser overlays working together in the same session.
 
 ## Install In 60 Seconds
 
