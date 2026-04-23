@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#111;color:#fff">
+  <canvas id="c" width="800" height="500"></canvas>
+  <script>
+    const canvas = document.getElementById("c");
+    const offscreen = canvas.transferControlToOffscreen();
+    const workerCode = `
+      self.onmessage = (e) => {
+        const c = e.data.canvas;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#081225";
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.font = "bold 36px Arial";
+        ctx.fillStyle = "#ffdf6e";
+        ctx.fillText("OffscreenCanvas", 40, 120);
+        ctx.fillStyle = "#7cf8ff";
+        ctx.fillRect(40, 180, 120, 120);
+      };
+    `;
+    const blob = new Blob([workerCode], { type: "application/javascript" });
+    const worker = new Worker(URL.createObjectURL(blob));
+    worker.postMessage({ canvas: offscreen }, [offscreen]);
+  </script>
+</body>
+</html>

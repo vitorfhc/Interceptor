@@ -5,8 +5,11 @@ export type ValidatorType = "text_in_answer" | "text_all_of_in_answer" | "text_a
 
 export interface CommandPolicy {
   requireAnyPrefix?: string[]
+  requireEveryCommandPrefix?: string[]
   forbidAnyPrefix?: string[]
   forbidSubstrings?: string[]
+  forbidToolTypes?: string[]
+  maxCommands?: number
 }
 
 export interface PreflightConfig {
@@ -125,6 +128,7 @@ export interface UsageMetrics {
   command_count: number
   error_count: number
   command_log: string[]
+  tool_log: string[]
   interceptor_telemetry?: InterceptorTelemetry
 }
 
@@ -144,7 +148,14 @@ export interface JudgeGrade {
   judge_model: string
 }
 
-export type GradeResult = DeterministicGrade | JudgeGrade
+export interface InvalidGrade {
+  pass: false
+  score: 0
+  reason: string
+  mode: "invalid"
+}
+
+export type GradeResult = DeterministicGrade | JudgeGrade | InvalidGrade
 
 export interface RunSpec {
   suite: SuiteId
@@ -188,6 +199,9 @@ export interface RunResult {
 export interface HeadlineSummaryRow {
   condition: ConditionId
   suite: SuiteId
+  attempted: number
+  valid: number
+  invalid: number
   successRate: number
   avgSeconds: number
   avgTurns: number

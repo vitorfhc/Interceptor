@@ -15,14 +15,7 @@ interceptor-macos-screenshot-*.jpg
 interceptor-macos-screenshot-*.png
 prd/
 scripts/auto-improve/
-signing.env
-notarization.env
-appcast.xml
-sparkle/
-updates/
 interceptor-bridge/.build/
-installer-app/.build/
-interceptor-app/.build/
 keys/
 /.vscode/
 /Auto\ Run\ Docs/
@@ -30,4 +23,3 @@ keys/
 /MEMORY/
 bench-head-to-head/results/
 bench-head-to-head/results-archive-*/
-extension/dist.crx

@@ -2,7 +2,11 @@
  * cli/parse.ts — argument parsing utilities shared across command modules
  */
 
-export function parseElementTarget(arg: string): { index?: number; ref?: string; semantic?: { role: string; name: string } } {
+export function parseElementTarget(arg: string): { index?: number; ref?: string; frameId?: number; semantic?: { role: string; name: string } } {
+  const framed = /^e(\d+)_(\d+)$/.exec(arg)
+  if (framed) {
+    return { ref: `e${framed[2]}`, frameId: parseInt(framed[1], 10) }
+  }
   if (/^e\d+$/.test(arg)) return { ref: arg }
   const n = parseInt(arg)
   if (!isNaN(n)) return { index: n }

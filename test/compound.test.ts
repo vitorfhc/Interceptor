@@ -1,34 +1,40 @@
 import { describe, expect, test } from "bun:test"
-import { aggregateReadResults } from "../cli/commands/compound"
+import { buildReadTreeAction } from "../cli/commands/compound"
+import { parseElementTarget } from "../cli/parse"
 
-describe("compound read aggregation", () => {
-  test("fails when all requested reads fail", () => {
-    const result = aggregateReadResults({
-      treeRequested: true,
-      textRequested: true,
-      treeResult: { success: false, error: "tree unavailable" },
-      textResult: { success: false, error: "text unavailable" },
-      full: false,
+describe("buildReadTreeAction", () => {
+  test("passes subtree targeting into get_a11y_tree for regular reads", () => {
+    const target = parseElementTarget("e7")
+    const action = buildReadTreeAction({
+      target,
+      filterMode: "interactive",
+      includeStyle: true,
+      includeFrames: false
     })
 
-    expect(result.success).toBe(false)
-    expect(result.error).toContain("tree unavailable")
-    expect(result.error).toContain("text unavailable")
+    expect(action).toMatchObject({
+      type: "get_a11y_tree",
+      ref: "e7",
+      includeStyle: true,
+      filter: "interactive"
+    })
   })
 
-  test("returns partial success when one requested read succeeds", () => {
-    const result = aggregateReadResults({
-      treeRequested: true,
-      textRequested: true,
-      treeResult: { success: true, data: "tree data" },
-      textResult: { success: false, error: "text unavailable" },
-      full: false,
+  test("passes frame and ref targeting into frames_read_tree", () => {
+    const target = parseElementTarget("e9_2")
+    const action = buildReadTreeAction({
+      target,
+      filterMode: "interactive",
+      includeStyle: false,
+      includeFrames: true
     })
 
-    expect(result.success).toBe(true)
-    expect(result.tree).toBe("tree data")
-    expect(result.text).toBeUndefined()
-    expect(result.warnings).toContain("text: text unavailable")
+    expect(action).toMatchObject({
+      type: "frames_read_tree",
+      frameId: 9,
+      ref: "e2",
+      includeStyle: false,
+      filter: "interactive"
+    })
   })
 })
-

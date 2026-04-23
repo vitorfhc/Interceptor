@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#111;color:#fff;font-family:sans-serif">
+  <canvas id="c" width="900" height="500"></canvas>
+  <script>
+    const c = document.getElementById("c");
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#12061e";
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.fillStyle = "#ff4fd8";
+    ctx.fillRect(40, 40, 140, 90);
+    ctx.strokeStyle = "#00e5ff";
+    ctx.strokeRect(220, 40, 180, 100);
+    ctx.font = "bold 40px Arial";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText("Canvas Fixture", 40, 220);
+    ctx.font = "28px Arial";
+    ctx.fillStyle = "#7cf8ff";
+    ctx.fillText("Hello from 2D", 40, 280);
+    ctx.beginPath();
+    ctx.moveTo(500, 120);
+    ctx.lineTo(760, 240);
+    ctx.lineTo(610, 360);
+    ctx.strokeStyle = "#ffd166";
+    ctx.lineWidth = 8;
+    ctx.stroke();
+  </script>
+</body>
+</html>

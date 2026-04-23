@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Hacker-Valley-Media/Interceptor/releases/download/v0.8.0/Interceptor-v0.8.0-macOS.dmg"><strong>Download macOS DMG</strong></a>
+  <a href="#install-in-60-seconds"><strong>Install via CLI</strong></a>
   ·
   <a href="#quick-start"><strong>Quick Start</strong></a>
   ·
@@ -68,23 +68,26 @@ Interceptor was built from the opposite premise: use the browser and apps the hu
 
 ![Preview from the current Interceptor walkthrough](docs/assets/interceptor-demo-preview.jpg)
 
-The current walkthrough shows the packaged app, CLI flow, and live browser overlays working together in the same session.
+The current walkthrough shows the CLI flow and live browser overlays working together in the same session.
 
 ## Install In 60 Seconds
 
-If you just want the package install, start here:
+The primary local install path is CLI-first. Brave is the recommended browser target because it accepts `--load-extension` from the install script.
 
-1. Download [`Interceptor-v0.8.0-macOS.dmg`](https://github.com/Hacker-Valley-Media/Interceptor/releases/download/v0.8.0/Interceptor-v0.8.0-macOS.dmg)
-2. Open the DMG and drag **Interceptor.app** into **Applications**
-3. Launch **Interceptor.app** from `/Applications`
-4. Pick your browser and profile in the first-launch flow
-5. Approve the helper in Login Items if macOS asks
-6. Grant Accessibility, Screen Recording, or Microphone as needed
-7. Run `interceptor status` to confirm the daemon, helper, and bridge are alive
+```bash
+git clone https://github.com/Hacker-Valley-Media/Interceptor.git
+cd Interceptor
+bun install
+bash scripts/build.sh
+bash scripts/install.sh --brave --profile Default
+./dist/interceptor status
+```
 
-For the latest release page and notes, see [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest).
+If Brave is already open, the install script asks before quitting and relaunching it with `extension/dist/` loaded. If you want `interceptor` on your `PATH`, symlink `dist/interceptor` into a directory already on your shell path; otherwise use `./dist/interceptor` from the repo.
 
 ## Quick Start
+
+Examples below assume `interceptor` is on your `PATH`. From a repo install, use `./dist/interceptor` if you have not added a symlink.
 
 ```bash
 interceptor open "https://example.com"       # Open, wait, return tree + text (1 command)
@@ -106,118 +109,61 @@ Shared repo-local skills live under [`.agents/skills/`](.agents/skills/). For cr
 
 ## Detailed Installation
 
-### Option 1: DMG Installer (Recommended)
+### Option 1: Brave CLI Install (Recommended)
 
-The standard Mac install path. The DMG contains `Interceptor.app` plus an `Applications` shortcut.
+#### Prerequisites
 
-1. Download the macOS DMG attached to the [latest release](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest)
-2. Open the DMG
-3. Drag **Interceptor.app** into **Applications**
-4. Launch **Interceptor.app** from `/Applications`
-5. Select your browser and profile in the first-launch setup flow
-6. Approve the background helper in Login Items if macOS asks
-7. Grant Accessibility / Screen Recording / Microphone as needed
+- [Bun](https://bun.sh/) runtime
+- Brave Browser
 
-After the first install, Interceptor updates itself from the installed app bundle using Sparkle. The DMG is only for first install; the app owns subsequent updates.
+#### Build and Install
 
-The installed app writes thin CLI wrappers into `~/.interceptor/bin/`, injects the extension into your selected browser profile, installs the native messaging host manifest for every installed supported Chromium-family browser root, and registers the bundled bridge helper from inside the app bundle. No `chrome://extensions`, no developer mode, no manual launch-agent plist management.
+```bash
+git clone https://github.com/Hacker-Valley-Media/Interceptor.git
+cd Interceptor
+bun install
+bash scripts/build.sh
+bash scripts/install.sh --brave --profile Default
+```
 
-To uninstall later:
+This builds the host binaries and extension, writes native messaging manifests, and relaunches Brave with the unpacked extension from `extension/dist/`. Use `bash scripts/install.sh --brave --profiles` to list profile directories before choosing a non-default profile.
+
+This path produces and uses these artifacts:
+
+| Artifact | Path |
+|----------|------|
+| CLI binary | `dist/interceptor` |
+| Background daemon | `daemon/interceptor-daemon` |
+| Chrome extension | `extension/dist/` |
+
+#### Put the CLI on PATH
+
+Run commands from the repo with `./dist/interceptor ...`, or symlink the binary into an existing PATH directory:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$PWD/dist/interceptor" ~/.local/bin/interceptor
+```
+
+#### Chrome Development Path
+
+Google Chrome ignores `--load-extension` in branded desktop builds. `scripts/install.sh --chrome` still writes the native messaging manifest, but load the extension manually:
+
+1. Open Chrome and navigate to `chrome://extensions`
+2. Enable **Developer mode**
+3. Click **Load unpacked**
+4. Select `extension/dist/`
+
+#### Uninstall
 
 ```bash
 bash scripts/uninstall.sh
 ```
 
-#### Build the DMG yourself
-
-```bash
-git clone https://github.com/Hacker-Valley-Media/Interceptor.git
-cd Interceptor
-bash scripts/build.sh
-bash scripts/build-dmg.sh
-# Output: dist/Interceptor-v<version>-macOS.dmg
-```
-
-### Option 2: Manual Install (Developer)
-
-#### Prerequisites
-
-- [Bun](https://bun.sh/) runtime
-- Chrome or Brave browser
-
-#### Build
-
-```bash
-git clone https://github.com/Hacker-Valley-Media/Interceptor.git
-cd Interceptor
-bash scripts/build.sh
-```
-
-This produces three artifacts:
-
-| Artifact | Path |
-|----------|------|
-| CLI binary | `dist/interceptor` |
-| Background daemon | `daemon/interceptor-daemon` |
-| Chrome extension | `extension/dist/` |
-
-#### Build the App Bundle / Package
-
-```bash
-bash scripts/build.sh
-bash scripts/build-app.sh
-```
-
-This produces:
-
-| Artifact | Path |
-|----------|------|
-| App bundle | `dist/Interceptor.app` |
-| CLI binary | `dist/interceptor` |
-| Background daemon | `daemon/interceptor-daemon` |
-| Setup helper | `dist/interceptor-setup` |
-| Chrome extension | `extension/dist/` |
-
-For local development outside `/Applications`, allow the app to bypass the install-location gate:
-
-```bash
-INTERCEPTOR_ALLOW_LOCAL_RUN=1 open dist/Interceptor.app
-```
-
-If you still need a signed installer package for internal/admin workflows, you can build it separately:
-
-```bash
-bash scripts/build-pkg.sh
-```
-
-#### Install the CLI Only
-
-Add the binary to your PATH:
-
-```bash
-cp dist/interceptor /usr/local/bin/
-```
-
-#### Install the Chrome Extension
-
-1. Open Chrome or Brave and navigate to `chrome://extensions`
-2. Enable **Developer mode** (toggle in the top-right corner)
-3. Click **Load unpacked**
-4. Select the `extension/dist/` directory from this repo
-5. The interceptor extension icon should appear in your toolbar
-
-#### Register Native Messaging (macOS)
-
-The CLI communicates with the extension via Chrome's native messaging protocol. Run the install script to register the manifest:
-
-```bash
-bash scripts/install.sh
-```
-
 ### Verify
 
 ```bash
-interceptor status    # Should report daemon status
+./dist/interceptor status    # Should report daemon, extension, and browser bridge status
 ```
 
 ## Development Verification
@@ -235,44 +181,15 @@ bash scripts/build.sh # Build compiled host binaries and extension bundles
 - Run `bash scripts/build.sh` when you need to verify the actual host binaries and extension bundles still compile.
 - For changes that affect browser behavior or shared infrastructure, run all three.
 
-## Sparkle Release Assets
-
-The app-level updater expects:
-
-- `appcast.xml` at the URL configured in `sparkle/feed-url.txt`
-- versioned update archives under `updates/`
-
-Generate the updater artifacts locally with:
-
-```bash
-bash scripts/setup-sparkle-keys.sh          # first time only
-bash scripts/build-sparkle-artifacts.sh
-```
-
-This writes:
-
-- `appcast.xml`
-- `updates/Interceptor-<version>.zip`
-- `dist/sparkle/appcast.xml`
-- `dist/sparkle/Interceptor-<version>.zip`
-
 ## macOS Bridge (development)
 
-The packaged install flow now ships the bridge helper inside `Interceptor.app` and registers it from the app bundle. The standalone `interceptor-bridge` path below is retained for development and low-level debugging only.
+The Brave CLI browser install does not require the macOS bridge. Use the standalone `interceptor-bridge` path below when developing or debugging native macOS automation.
 
-### Quick Install (pre-built, signed & notarized)
-
-```bash
-bash scripts/install-bridge.sh
-```
-
-Downloads the latest signed binary from GitHub Releases, verifies the code signature, and installs it as a standalone debug bridge. This is no longer required for the standard package install.
-
-### Build From Source (requires Xcode)
+### Build and Install
 
 ```bash
 bash scripts/build-bridge.sh
-bash scripts/install-bridge.sh --local
+bash scripts/install-bridge.sh
 ```
 
 Requires full Xcode (not just Command Line Tools) — the bridge links Apple frameworks including ScreenCaptureKit, Speech, Vision, and NaturalLanguage.
@@ -285,7 +202,7 @@ After installing, check and grant required permissions:
 interceptor macos trust
 ```
 
-For packaged installs, treat `interceptor macos trust` as a permission snapshot. Use `interceptor status` to confirm the daemon, helper, and bridge socket are actually alive before debugging native runtime failures.
+Treat `interceptor macos trust` as a permission snapshot. Use `interceptor status` to confirm the daemon, helper, and bridge socket are actually alive before debugging native runtime failures.
 
 | Permission | Required | What It Enables |
 |-----------|----------|-----------------|
@@ -328,6 +245,13 @@ interceptor open "https://example.com" --no-wait     # Don't wait for load
 interceptor read                              # Tree + text for current page
 interceptor read e5                           # Tree + text for element subtree
 interceptor read --tree-only                  # Just tree
+interceptor read --include-style              # Inline computed styles (display, color, opacity, etc.) on each element
+interceptor read --include-frames             # Walk every reachable frame; refs from non-top frames are e<frameId>_<n>
+interceptor read e2_7 --include-frames        # Read only a framed element subtree
+interceptor style inject --css "button{outline:3px solid red}" # Inject stylesheet into all frames
+interceptor style inject --css "body{zoom:1.1}" --top-only     # Inject only into the top frame
+interceptor style remove <handle>             # Remove a previously injected stylesheet
+interceptor act e2_7                          # Act on element in frame 2 (routed automatically)
 interceptor act e5                            # Click + wait + return updated tree + diff
 interceptor act e3 "hello"                    # Type + wait + return updated tree
 interceptor act e5 --os                       # OS-level trusted click
@@ -686,12 +610,20 @@ interceptor monitor export <sessionId>        # Aligned text rendering
 interceptor monitor export <sessionId> --plan # Replayable script of interceptor commands
 ```
 
-### Diff canvas pixels between two renders (the OTHER `interceptor canvas`)
+### Inspect and read canvas-heavy pages
 ```bash
 interceptor canvas list                       # Discover <canvas> elements (HTMLCanvasElement)
+interceptor canvas status                     # Canvas list + host/model/observer signals
+interceptor canvas log                        # Captured drawing operations across canvases
+interceptor canvas log 0 --kind fillText      # Drawing operations for canvas index 0
+interceptor canvas objects 0 --kind text      # Derived objects for canvas index 0
+interceptor canvas model                      # Host-state and app-model signals
+interceptor canvas routes --filter save       # First-party canvas-related network routes
 interceptor canvas read 0 --format png        # Read canvas as data URL
 interceptor canvas diff url1.png url2.png     # Pixel diff between images
 ```
+
+Canvas indexes come from the DOM canvas order reported by `canvas list`. The observer-backed `log` and `objects` commands resolve that DOM index to the internal observer `canvasId`, so `canvas log 0` and `canvas log 1` stay separated on multi-canvas pages. `canvas ocr` exists as an experimental command, but use `canvas read` when you need a stable image export.
 
 ## macOS Native Control
 
@@ -699,7 +631,7 @@ interceptor canvas diff url1.png url2.png     # Pixel diff between images
 
 ### How It Works
 
-A bundled `Interceptor.app` runs as a LaunchAgent and contains the macOS bridge, daemon, and CLI in one app bundle. The daemon routes `macos_` commands to the bridge over Unix socket. Same CLI binary, same wire format, same ref convention (`e1`, `e2`, ...).
+When the native bridge is installed, the daemon routes `macos_` commands to the bridge over Unix socket. Same CLI binary, same wire format, same ref convention (`e1`, `e2`, ...). Browser automation through Brave works through the CLI install path without the native bridge.
 
 ```
 CLI ──unix──▸ Daemon ──native-msg──▸ Chrome Extension (web commands)

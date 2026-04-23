@@ -31,7 +31,10 @@ export function runJudge(task: TaskDef, final: AgentFinalMessage, models: Models
     `-o ${outputPath}`,
     JSON.stringify(prompt),
   ].join(" ")
-  const result = shellResult(command, { timeoutMs: 180_000 })
+  const result = shellResult(command, {
+    cwd: "/tmp",
+    timeoutMs: 180_000,
+  })
   writeText(`${artifactDir}/judge-output.jsonl`, result.stdout)
   writeText(`${artifactDir}/judge-stderr.txt`, result.stderr)
   if (!result.ok) {

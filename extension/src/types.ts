@@ -8,8 +8,8 @@ export type Action =
   | { type: "wait"; ms: number }
   | { type: "go_back" }
   | { type: "go_forward" }
-  | { type: "extract_text"; index?: number; ref?: string }
-  | { type: "extract_html"; index?: number; ref?: string }
+  | { type: "extract_text"; index?: number; ref?: string; frameId?: number }
+  | { type: "extract_html"; index?: number; ref?: string; frameId?: number }
   | { type: "evaluate"; code: string; world?: "MAIN" | "ISOLATED" }
   | { type: "screenshot"; format?: "png" | "jpeg"; quality?: number; save?: boolean; clip?: { x: number; y: number; width: number; height: number }; element?: number; full?: boolean }
   | { type: "tab_create"; url?: string }
@@ -32,7 +32,7 @@ export type Action =
   | { type: "drag"; index?: number; ref?: string; fromX: number; fromY: number; toX: number; toY: number; steps?: number; duration?: number }
   | { type: "file_upload"; index?: number; ref?: string; filePath: string }
   | { type: "get_state"; full?: boolean; tabId?: number }
-  | { type: "get_a11y_tree"; depth?: number; filter?: "interactive" | "all"; maxChars?: number }
+  | { type: "get_a11y_tree"; depth?: number; filter?: "interactive" | "all"; maxChars?: number; includeStyle?: boolean; index?: number; ref?: string; frameId?: number }
   | { type: "diff" }
   | { type: "find_element"; query: string; role?: string; limit?: number }
   | { type: "dblclick"; index?: number; ref?: string; x?: number; y?: number }
@@ -47,6 +47,12 @@ export type Action =
   | { type: "status" }
   | { type: "canvas_list" }
   | { type: "canvas_read"; canvasIndex: number; format?: "png" | "jpeg"; quality?: number; region?: { x: number; y: number; width: number; height: number }; webgl?: boolean }
+  | { type: "canvas_status" }
+  | { type: "canvas_log"; canvasIndex?: number; kinds?: string[]; limit?: number }
+  | { type: "canvas_objects"; canvasIndex?: number; kind?: string; limit?: number }
+  | { type: "canvas_model"; limit?: number }
+  | { type: "canvas_routes"; filter?: string; limit?: number }
+  | { type: "canvas_ocr"; canvasIndex: number; region?: { x: number; y: number; width: number; height: number } }
   | { type: "canvas_diff"; image1: string; image2: string; threshold?: number; returnImage?: boolean }
   | { type: "capture_start" }
   | { type: "capture_frame"; format?: "png" | "jpeg"; quality?: number }

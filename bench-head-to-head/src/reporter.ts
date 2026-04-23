@@ -30,15 +30,19 @@ function summarize(results: RunResult[]): HeadlineSummaryRow[] {
   return [...groups.entries()].map(([key, rows]) => {
     const [condition, suite] = key.split(":") as [HeadlineSummaryRow["condition"], SuiteId]
     const costs = rows.map((row) => row.usage.total_cost_usd).filter((value): value is number => value !== null)
+    const validRows = rows.filter((row) => row.grade.mode !== "invalid")
     return {
       condition,
       suite,
-      successRate: rows.filter((row) => row.grade.pass).length / rows.length,
-      avgSeconds: mean(rows.map((row) => row.usage.wall_clock_seconds)),
-      avgTurns: mean(rows.map((row) => row.usage.turn_count)),
-      avgCommands: mean(rows.map((row) => row.usage.command_count)),
-      avgInputTokens: mean(rows.map((row) => row.usage.input_tokens)),
-      avgOutputTokens: mean(rows.map((row) => row.usage.output_tokens)),
+      attempted: rows.length,
+      valid: validRows.length,
+      invalid: rows.length - validRows.length,
+      successRate: validRows.length === 0 ? 0 : validRows.filter((row) => row.grade.pass).length / validRows.length,
+      avgSeconds: mean(validRows.map((row) => row.usage.wall_clock_seconds)),
+      avgTurns: mean(validRows.map((row) => row.usage.turn_count)),
+      avgCommands: mean(validRows.map((row) => row.usage.command_count)),
+      avgInputTokens: mean(validRows.map((row) => row.usage.input_tokens)),
+      avgOutputTokens: mean(validRows.map((row) => row.usage.output_tokens)),
       avgCost: costs.length > 0 ? mean(costs) : null,
     }
   })
@@ -49,17 +53,18 @@ function markdown(results: RunResult[]): string {
   const summary = summarize(results)
   lines.push("# Codex Head-to-Head Results — interceptor vs axi\n")
   lines.push("## Table A — Headline Summary\n")
-  lines.push("| Condition | Suite | Success % | Avg Seconds | Avg Turns | Avg Commands | Avg Input Tokens | Avg Output Tokens | Avg Cost |")
-  lines.push("|---|---|---:|---:|---:|---:|---:|---:|---:|")
+  lines.push("| Condition | Suite | Attempted | Valid | Invalid | Success % | Avg Seconds | Avg Turns | Avg Commands | Avg Input Tokens | Avg Output Tokens | Avg Cost |")
+  lines.push("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
   for (const row of summary) {
-    lines.push(`| ${row.condition} | ${row.suite} | ${(row.successRate * 100).toFixed(0)} | ${row.avgSeconds.toFixed(1)} | ${row.avgTurns.toFixed(1)} | ${row.avgCommands.toFixed(1)} | ${row.avgInputTokens.toFixed(0)} | ${row.avgOutputTokens.toFixed(0)} | ${row.avgCost === null ? "n/a" : `$${row.avgCost.toFixed(4)}`} |`)
+    lines.push(`| ${row.condition} | ${row.suite} | ${row.attempted} | ${row.valid} | ${row.invalid} | ${(row.successRate * 100).toFixed(0)} | ${row.avgSeconds.toFixed(1)} | ${row.avgTurns.toFixed(1)} | ${row.avgCommands.toFixed(1)} | ${row.avgInputTokens.toFixed(0)} | ${row.avgOutputTokens.toFixed(0)} | ${row.avgCost === null ? "n/a" : `$${row.avgCost.toFixed(4)}`} |`)
   }
 
   lines.push("\n## Table B — Per-Task Result Table\n")
   lines.push("| Task ID | Task Name | Condition | Pass/Fail | Seconds | Turns | Commands | Input Tokens | Output Tokens | Cost | Judge Mode | Notes |")
   lines.push("|---|---|---|---|---:|---:|---:|---:|---:|---:|---|---|")
   for (const result of results) {
-    lines.push(`| ${result.taskId} | ${result.taskName} | ${result.condition} | ${result.grade.pass ? "PASS" : "FAIL"} | ${result.usage.wall_clock_seconds.toFixed(1)} | ${result.usage.turn_count} | ${result.usage.command_count} | ${result.usage.input_tokens} | ${result.usage.output_tokens} | ${result.usage.total_cost_usd === null ? "n/a" : `$${result.usage.total_cost_usd.toFixed(4)}`} | ${result.grade.mode} | ${result.grade.reason.replace(/\|/g, "/")} |`)
+    const verdict = result.grade.mode === "invalid" ? "INVALID" : result.grade.pass ? "PASS" : "FAIL"
+    lines.push(`| ${result.taskId} | ${result.taskName} | ${result.condition} | ${verdict} | ${result.usage.wall_clock_seconds.toFixed(1)} | ${result.usage.turn_count} | ${result.usage.command_count} | ${result.usage.input_tokens} | ${result.usage.output_tokens} | ${result.usage.total_cost_usd === null ? "n/a" : `$${result.usage.total_cost_usd.toFixed(4)}`} | ${result.grade.mode} | ${result.grade.reason.replace(/\|/g, "/")} |`)
   }
 
   lines.push("\n## Table C — Win/Loss Matrix\n")
@@ -70,13 +75,16 @@ function markdown(results: RunResult[]): string {
     const interceptorRuns = results.filter((r) => r.taskId === taskId && r.condition === "interceptor")
     const axiRuns = results.filter((r) => r.taskId === taskId && r.condition === "axi")
     if (interceptorRuns.length === 0 || axiRuns.length === 0) continue
+    const validInterceptorRuns = interceptorRuns.filter((r) => r.grade.mode !== "invalid")
+    const validAxiRuns = axiRuns.filter((r) => r.grade.mode !== "invalid")
+    if (validInterceptorRuns.length === 0 || validAxiRuns.length === 0) continue
     const taskName = interceptorRuns[0].taskName
-    const interceptorSuccess = interceptorRuns.filter((r) => r.grade.pass).length / interceptorRuns.length
-    const axiSuccess = axiRuns.filter((r) => r.grade.pass).length / axiRuns.length
-    const interceptorSpeed = mean(interceptorRuns.map((r) => r.usage.wall_clock_seconds))
-    const axiSpeed = mean(axiRuns.map((r) => r.usage.wall_clock_seconds))
-    const interceptorTokens = mean(interceptorRuns.map((r) => r.usage.input_tokens + r.usage.output_tokens))
-    const axiTokens = mean(axiRuns.map((r) => r.usage.input_tokens + r.usage.output_tokens))
+    const interceptorSuccess = validInterceptorRuns.filter((r) => r.grade.pass).length / validInterceptorRuns.length
+    const axiSuccess = validAxiRuns.filter((r) => r.grade.pass).length / validAxiRuns.length
+    const interceptorSpeed = mean(validInterceptorRuns.map((r) => r.usage.wall_clock_seconds))
+    const axiSpeed = mean(validAxiRuns.map((r) => r.usage.wall_clock_seconds))
+    const interceptorTokens = mean(validInterceptorRuns.map((r) => r.usage.input_tokens + r.usage.output_tokens))
+    const axiTokens = mean(validAxiRuns.map((r) => r.usage.input_tokens + r.usage.output_tokens))
     const betterSuccess = interceptorSuccess > axiSuccess ? "interceptor" : axiSuccess > interceptorSuccess ? "axi" : "tie"
     const betterSpeed = interceptorSpeed < axiSpeed ? "interceptor" : axiSpeed < interceptorSpeed ? "axi" : "tie"
     const betterTokens = interceptorTokens < axiTokens ? "interceptor" : axiTokens < interceptorTokens ? "axi" : "tie"
@@ -100,8 +108,10 @@ function markdown(results: RunResult[]): string {
   }
 
   const costs = results.map((row) => row.usage.total_cost_usd).filter((value): value is number => value !== null)
+  const invalidRuns = results.filter((row) => row.grade.mode === "invalid").length
   lines.push("\n## Notes\n")
   lines.push(`- Runs captured: ${results.length}`)
+  lines.push(`- Invalid runs: ${invalidRuns}`)
   lines.push(`- Total cost recorded: ${costs.length > 0 ? `$${sum(costs).toFixed(4)}` : "n/a"}`)
   lines.push("- Cost remains n/a until a verified Codex pricing table is configured.")
   return lines.join("\n") + "\n"

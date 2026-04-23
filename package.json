@@ -12,7 +12,10 @@
     "cli": "bun run cli/index.ts"
   },
   "devDependencies": {
+    "@happy-dom/global-registrator": "^20.9.0",
     "@types/bun": "latest",
-    "@types/chrome": "latest"
+    "@types/chrome": "latest",
+    "happy-dom": "^20.9.0",
+    "ocrad.js": "^0.0.1"
   }
 }

@@ -4,10 +4,21 @@ type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: 
 
 const CSP_BYPASS_RULE_ID_BASE = 910_000
 
+export function isTrustedTypesError(error: string | undefined): boolean {
+  if (!error) return false
+  return /trusted ?types|trustedscript|require-trusted-types-for|createPolicy/i.test(error)
+}
+
+export function isCspUnsafeEvalError(error: string | undefined): boolean {
+  if (!error) return false
+  if (isTrustedTypesError(error)) return false
+  return /content security policy|script-src|unsafe-eval/i.test(error)
+    && /eval|evaluating a string|string as javascript/i.test(error)
+}
+
 export function isCspEvalError(error: string | undefined): boolean {
   if (!error) return false
-  return /content security policy|script-src|unsafe-eval|trustedscript/i.test(error)
-    && /eval|evaluating a string|string as javascript|trusted types/i.test(error)
+  return isTrustedTypesError(error) || isCspUnsafeEvalError(error)
 }
 
 export function buildCspBypassRule(tabId: number): chrome.declarativeNetRequest.Rule {
@@ -146,7 +157,33 @@ export async function handleEvaluateActions(
     return userScriptAttempt.result ?? { success: false, error: "no result" }
   }
   const first = await executeEval(tabId, world as "MAIN" | "ISOLATED", code)
-  if (first.success || world !== "MAIN" || !isCspEvalError(first.error)) {
+  if (first.success || world !== "MAIN") {
+    return first
+  }
+
+  if (isTrustedTypesError(first.error) && !isCspUnsafeEvalError(first.error)) {
+    const isolated = await executeEval(tabId, "ISOLATED", code)
+    if (isolated.success) {
+      return {
+        ...isolated,
+        data: {
+          value: isolated.data,
+          trustedTypesFallback: true,
+          originalError: first.error
+        }
+      }
+    }
+    return {
+      success: false,
+      error: isolated.error || first.error,
+      data: {
+        originalError: first.error,
+        trustedTypesFallbackAttempted: true
+      }
+    }
+  }
+
+  if (!isCspUnsafeEvalError(first.error)) {
     return first
   }
 

@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#111;color:#fff;font-family:sans-serif">
+  <canvas id="c" width="800" height="500"></canvas>
+  <pre id="status"></pre>
+  <script>
+    const c = document.getElementById("c");
+    const ctx = c.getContext("2d");
+    const status = document.getElementById("status");
+    ctx.fillStyle = "#140718";
+    ctx.fillRect(0, 0, c.width, c.height);
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 40, 40, 320, 120);
+      try {
+        c.toDataURL("image/png");
+        status.textContent = "not tainted";
+      } catch (err) {
+        status.textContent = "tainted: " + err.message;
+      }
+    };
+    img.onerror = () => {
+      status.textContent = "image load failed";
+    };
+    img.src = "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png";
+  </script>
+</body>
+</html>

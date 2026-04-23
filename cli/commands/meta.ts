@@ -7,49 +7,10 @@
  */
 
 import { existsSync, readFileSync } from "node:fs"
-import { spawnSync } from "node:child_process"
-import { dirname, join, resolve } from "node:path"
 import { IS_WIN, SOCKET_PATH, PID_PATH, transportLabel } from "../../shared/platform"
 import { parseElementTarget } from "../parse"
 
 type Action = { type: string; [key: string]: unknown }
-
-function findInterceptorAppExecutable(): string | null {
-  const exePath = resolve(process.execPath || process.argv[0] || "")
-  const exeDir = dirname(exePath)
-  const home = process.env.HOME || ""
-  const candidates = [
-    join(exeDir, "..", "..", "MacOS", "Interceptor"),
-    resolve("dist", "Interceptor.app", "Contents", "MacOS", "Interceptor"),
-    "/Applications/Interceptor.app/Contents/MacOS/Interceptor",
-    join(home, "Applications", "Interceptor.app", "Contents", "MacOS", "Interceptor"),
-  ]
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate
-  }
-  return null
-}
-
-function readHelperStatus():
-  | { status: string; legacyPlistExists?: boolean; legacyStatus?: string }
-  | null {
-  const appExecutable = findInterceptorAppExecutable()
-  if (!appExecutable) return null
-  try {
-    const result = spawnSync(appExecutable, ["helper-status"], { encoding: "utf8" })
-    if (result.status !== 0 || !result.stdout) return null
-    const parsed = JSON.parse(result.stdout) as { status?: string; legacyPlistExists?: boolean; legacyStatus?: string }
-    return parsed.status
-      ? {
-          status: parsed.status,
-          legacyPlistExists: parsed.legacyPlistExists,
-          legacyStatus: parsed.legacyStatus,
-        }
-      : null
-  } catch {
-    return null
-  }
-}
 
 export async function parseMetaCommand(filtered: string[], jsonMode = false): Promise<Action | null> {
   const cmd = filtered[0]
@@ -77,17 +38,6 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false): Pr
       statusLines.push(`socket: ${sockExists ? SOCKET_PATH : "not found"}`)
       statusLines.push(`transport: ${transport}`)
 
-      const helperStatus = readHelperStatus()
-      if (helperStatus) {
-        statusLines.push("")
-        statusLines.push(`helper: ${helperStatus.status}`)
-        if (helperStatus.legacyPlistExists) {
-          statusLines.push(`  legacy-plist: ${helperStatus.legacyStatus || "present"}`)
-        }
-      }
-
-      // PRD-35: bridge health. The bridge powers `interceptor macos *` and is
-      // now registered from the installed app bundle instead of a legacy plist.
       const BRIDGE_PID_PATH = "/tmp/interceptor-bridge.pid"
       const BRIDGE_SOCK_PATH = "/tmp/interceptor-bridge.sock"
       const bridgeSockExists = !IS_WIN && existsSync(BRIDGE_SOCK_PATH)
@@ -106,13 +56,7 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false): Pr
       if (bridgePid) statusLines.push(`  pid: ${bridgePid}`)
       statusLines.push(`  socket: ${bridgeSockExists ? BRIDGE_SOCK_PATH : "not found"}`)
       if (!bridgeAlive) {
-        if (helperStatus?.status === "requiresApproval") {
-          statusLines.push("  hint: open Interceptor.app and approve the background helper in Login Items.")
-        } else if (helperStatus?.status === "notRegistered") {
-          statusLines.push("  hint: open Interceptor.app once to complete first-run setup and helper registration.")
-        } else {
-          statusLines.push("  hint: open Interceptor.app to refresh helper status and privacy onboarding.")
-        }
+        statusLines.push("  hint: run scripts/build-bridge.sh && scripts/install-bridge.sh for native macOS control.")
       }
 
       if (!daemonAlive) {
@@ -126,9 +70,6 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false): Pr
           pid: daemonPid,
           socket: sockExists ? SOCKET_PATH : null,
           transport,
-          helperStatus: helperStatus?.status || null,
-          helperLegacyPlist: helperStatus?.legacyPlistExists || false,
-          helperLegacyStatus: helperStatus?.legacyStatus || null,
           bridge: bridgeAlive,
           bridgePid,
           bridgeSocket: bridgeSockExists ? BRIDGE_SOCK_PATH : null
@@ -207,8 +148,35 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false): Pr
         return { type: "attr_get", ...parseElementTarget(filtered[1]), name: filtered[2] }
       }
 
-    case "style":
+    case "style": {
+      const sub = filtered[1]
+      if (sub === "inject") {
+        const cssIdx = filtered.indexOf("--css")
+        const css = cssIdx !== -1 ? filtered.slice(cssIdx + 1).join(" ") : undefined
+        if (!css) {
+          console.error("style inject requires --css <rules>")
+          return null
+        }
+        const frameIdsIdx = filtered.indexOf("--frame-ids")
+        const frameIds = frameIdsIdx !== -1
+          ? filtered[frameIdsIdx + 1]?.split(",").map((s: string) => parseInt(s.trim(), 10)).filter((n: number) => Number.isFinite(n))
+          : undefined
+        const origin = filtered.includes("--author") ? "AUTHOR" : "USER"
+        const action: Action = { type: "style_inject", css, origin }
+        if (frameIds && frameIds.length) action.frameIds = frameIds
+        else action.allFrames = !filtered.includes("--top-only")
+        return action
+      }
+      if (sub === "remove") {
+        const handle = filtered[2]
+        if (!handle) {
+          console.error("style remove requires a handle")
+          return null
+        }
+        return { type: "style_remove", handle }
+      }
       return { type: "style_get", ...parseElementTarget(filtered[1]), property: filtered[2] }
+    }
 
     case "search":
       return { type: "search_query", query: filtered.slice(1).join(" ") }

@@ -84,6 +84,30 @@ export function getRelevantAttrs(el: Element): string {
   return attrs.join(" ")
 }
 
+const STYLE_BUNDLE_PROPS = [
+  "display",
+  "visibility",
+  "color",
+  "backgroundColor",
+  "fontSize",
+  "fontWeight",
+  "cursor",
+  "opacity"
+] as const
+
+export function getStyleBundle(el: Element): string {
+  const cs = getComputedStyle(el)
+  const parts: string[] = []
+  for (const prop of STYLE_BUNDLE_PROPS) {
+    const cssName = prop === "backgroundColor" ? "background-color" : prop === "fontSize" ? "font-size" : prop === "fontWeight" ? "font-weight" : prop
+    const v = cs.getPropertyValue(cssName)
+    if (!v) continue
+    const trimmed = (v.length > 40 ? v.slice(0, 40) : v).replace(/\s+/g, " ").trim()
+    parts.push(`${prop}=${trimmed.includes(" ") ? `'${trimmed}'` : trimmed}`)
+  }
+  return parts.join(" ")
+}
+
 export function buildElementTree(elements: IndexedElement[]): string {
   return elements.map(e => {
     const role = getEffectiveRole(e.element)

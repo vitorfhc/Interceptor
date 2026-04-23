@@ -60,7 +60,7 @@ if [[ "$LIST_PROFILES" == "1" ]]; then
   for dir in "$PROFILE_ROOT"/*/; do
     name=$(basename "$dir")
     if [[ -f "$dir/Preferences" ]]; then
-      display=$(python3 -c "import json; p=json.load(open('$dir/Preferences')); print(p.get('profile',{}).get('name','(unnamed)'))" 2>/dev/null || echo "(unknown)")
+      display=$(plutil -extract profile.name raw -o - "$dir/Preferences" 2>/dev/null || echo "(unknown)")
       printf "  %-20s %s\n" "$name" "$display"
     fi
   done
@@ -71,13 +71,8 @@ fi
 
 # ── Step 1: Generate native messaging manifest ────────────────────────────────
 mkdir -p "$GENERATED_DIR"
-python3 - <<'PY' "$TEMPLATE_PATH" "$GENERATED_MANIFEST" "$DAEMON_PATH"
-from pathlib import Path
-import sys
-src = Path(sys.argv[1]).read_text()
-out = src.replace('__DAEMON_PATH__', sys.argv[3])
-Path(sys.argv[2]).write_text(out)
-PY
+ESCAPED_DAEMON_PATH="$(printf '%s' "$DAEMON_PATH" | sed 's/[&|\\]/\\&/g')"
+sed "s|__DAEMON_PATH__|$ESCAPED_DAEMON_PATH|g" "$TEMPLATE_PATH" > "$GENERATED_MANIFEST"
 
 # ── Step 2: Install native messaging symlinks ─────────────────────────────────
 for dir in \
@@ -170,6 +165,17 @@ if [[ "$BROWSER_RUNNING" == "1" ]]; then
   fi
 fi
 
+if [[ "$BROWSER" == "chrome" ]]; then
+  echo ""
+  echo "==> Google Chrome ignores --load-extension in branded desktop builds."
+  echo "    Use one of these paths instead:"
+  echo "      1. Developer flow: open chrome://extensions, enable Developer Mode,"
+  echo "         then Load unpacked -> $EXTENSION_DIR"
+  echo ""
+  echo "    Native messaging metadata has already been installed."
+  exit 0
+fi
+
 echo ""
 echo "==> Launching $BROWSER_NAME with --load-extension..."
 echo "    Extension: $EXTENSION_DIR"
@@ -181,9 +187,6 @@ if [[ -n "$PROFILE" ]]; then
   echo "    Profile:   $PROFILE"
 fi
 
-# Launch browser with --load-extension flag (and optional --profile-directory)
-# This works on Brave/Chromium (NOT blocked like in Google Chrome branded builds)
-# See: chromium/chrome/browser/extensions/extension_service.cc:416-436
 open -a "$BROWSER_APP" --args "${LAUNCH_ARGS[@]}"
 
 echo ""

@@ -11,6 +11,11 @@ Compound (agent-optimized):
   interceptor read <ref>                     Tree + text for element subtree
   interceptor read --tree-only               Skip text
   interceptor read --text-only               Skip tree
+  interceptor read --include-style           Inline computed styles per element
+  interceptor read --include-frames          Walk all reachable frames (non-top refs are e<frameId>_<n>)
+  interceptor style inject --css "<rules>"  Inject a stylesheet; returns a handle (all frames by default)
+  interceptor style inject --css "<rules>" --top-only   Inject only into the top frame
+  interceptor style remove <handle>          Remove a previously injected stylesheet
   interceptor act <ref>                      Click + wait + return updated tree + diff
   interceptor act <ref> "value"              Type into field + wait + return updated tree
   interceptor act <ref> --os                 Use OS-level trusted input
@@ -115,6 +120,15 @@ Headers:
 
 Canvas:
   interceptor canvas list                    Discover <canvas> elements
+  interceptor canvas status                  Summary of canvases, host signals, and observer state
+  interceptor canvas log [N]                 Read captured canvas operations (optionally for canvas N)
+  interceptor canvas log --kind fillText     Filter log by kind (comma-separated)
+  interceptor canvas objects [N]             Read derived canvas objects (optionally for canvas N)
+  interceptor canvas objects --kind text     Filter derived objects by kind
+  interceptor canvas model                   Inspect host-state and app-model signals
+  interceptor canvas routes                  Inspect candidate first-party canvas-related routes
+  interceptor canvas ocr N                   OCR text from canvas N
+  interceptor canvas ocr N --region X,Y,W,H  OCR a canvas crop
   interceptor canvas read N                  Read canvas as data URL
   interceptor canvas read N --format png     PNG format
   interceptor canvas read N --region X,Y,W,H  Read pixel region

@@ -600,21 +600,10 @@ interceptor reload                            # Reload extension in browser
 pkill interceptor-daemon                      # Next command auto-respawns
 ```
 
-### Extension install (DMG — recommended)
+### Extension install
 ```bash
-bash scripts/build-dmg.sh              # Build DMG installer
-# Open dist/Interceptor-v0.8.0-macOS.dmg, drag Interceptor.app into Applications
-# Launch /Applications/Interceptor.app, then select browser + profile
+bash scripts/build.sh
+bash scripts/install.sh --brave --profile Default
 ```
 
-### Extension install (manual)
-```bash
-bash scripts/install.sh                # macOS — native messaging manifest
-```
-Then load `extension/dist/` as unpacked extension in Chrome/Brave.
-
-### Silent inject (scripted)
-```bash
-python3 scripts/inject.py --browser brave --profile Default \
-  --extension-src extension/dist --daemon-path daemon/interceptor-daemon
-```
+Chrome branded desktop builds ignore `--load-extension`; for Chrome, run `bash scripts/install.sh --chrome`, then load `extension/dist/` manually from `chrome://extensions`.

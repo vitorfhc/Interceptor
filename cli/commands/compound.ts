@@ -81,6 +81,36 @@ export function aggregateReadResults(opts: {
   return { success: true, tree: tree || undefined, text: text || undefined, warnings }
 }
 
+type ReadTarget = ReturnType<typeof parseElementTarget> | Record<string, never>
+
+export function buildReadTreeAction(opts: {
+  target: ReadTarget
+  filterMode: string
+  includeStyle: boolean
+  includeFrames: boolean
+}): Action {
+  const base: Omit<Action, "type"> = {
+    depth: 15,
+    filter: opts.filterMode,
+    maxChars: 50000,
+    includeStyle: opts.includeStyle
+  }
+
+  if (opts.includeFrames) {
+    const action: Action = { type: "frames_read_tree", ...base }
+    if ("frameId" in opts.target && typeof opts.target.frameId === "number") {
+      action.frameId = opts.target.frameId
+    } else if ("ref" in opts.target && typeof opts.target.ref === "string") {
+      action.frameId = 0
+    }
+    if ("index" in opts.target && typeof opts.target.index === "number") action.index = opts.target.index
+    if ("ref" in opts.target && typeof opts.target.ref === "string") action.ref = opts.target.ref
+    return action
+  }
+
+  return { type: "get_a11y_tree", ...base, ...opts.target }
+}
+
 // ── interceptor open <url> ──────────────────────────────────────────────────────────
 
 export async function runOpen(
@@ -202,6 +232,8 @@ export async function runRead(
   const treeOnly = filtered.includes("--tree-only")
   const textOnly = filtered.includes("--text-only")
   const full = filtered.includes("--full")
+  const includeStyle = filtered.includes("--include-style")
+  const includeFrames = filtered.includes("--include-frames")
   const filterIdx = filtered.indexOf("--filter")
   const filterMode = filterIdx !== -1 ? filtered[filterIdx + 1] : "interactive"
 
@@ -216,10 +248,37 @@ export async function runRead(
   let textResult: Result | undefined
 
   if (!textOnly) {
-    treeResult = await send(
-      { type: "get_a11y_tree", depth: 15, filter: filterMode, maxChars: 50000 },
-      globalTabId, useWs
-    )
+    if (includeFrames) {
+      const framesResp = await send(
+        buildReadTreeAction({ target, filterMode, includeStyle, includeFrames }),
+        globalTabId, useWs
+      )
+      if (framesResp.success && framesResp.data && typeof framesResp.data === "object" && Array.isArray((framesResp.data as { frames?: unknown[] }).frames)) {
+        type FrameEntry = { frameId: number; parentFrameId: number; url: string; opaque?: true; error?: string; tree?: string }
+        const frames = (framesResp.data as { frames: FrameEntry[] }).frames
+        const parts: string[] = []
+        for (const frame of frames) {
+          const header = frame.frameId === 0
+            ? `# frame 0 (top): ${frame.url}`
+            : `# frame ${frame.frameId} (parent=${frame.parentFrameId}): ${frame.url}`
+          parts.push(header)
+          if (frame.opaque) {
+            parts.push(`  (opaque/cross-origin — ${frame.error || "unreachable"})`)
+          } else if (frame.tree) {
+            parts.push(frame.tree)
+          }
+          parts.push("")
+        }
+        treeResult = { success: true, data: parts.join("\n").trimEnd(), tabId: framesResp.tabId }
+      } else {
+        treeResult = framesResp
+      }
+    } else {
+      treeResult = await send(
+        buildReadTreeAction({ target, filterMode, includeStyle, includeFrames }),
+        globalTabId, useWs
+      )
+    }
   }
 
   if (!treeOnly) {

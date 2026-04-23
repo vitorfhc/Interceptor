@@ -11,6 +11,19 @@ if ((window as any).__interceptor_net_installed) {
         createScript: (input: string) => input,
       })
     } catch {}
+    if (!(window as any).__interceptor_tt_policy) {
+      try {
+        (window as any).__interceptor_tt_policy = (window as any).trustedTypes.createPolicy("interceptor-eval", {
+          createScript: (input: string) => input,
+        })
+      } catch {
+        try {
+          (window as any).__interceptor_tt_policy = (window as any).trustedTypes.createPolicy("interceptor-eval-" + Date.now(), {
+            createScript: (input: string) => input,
+          })
+        } catch {}
+      }
+    }
   }
 
   type OverrideRule = { urlPattern: string; queryAddOrReplace?: Record<string, string | number | boolean>; queryRemove?: string[] }

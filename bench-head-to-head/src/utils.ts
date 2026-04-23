@@ -33,7 +33,10 @@ export function loadConfig(): BenchConfig {
   const runPolicy = readJson<RunPolicy>(join(CONFIG_DIR, "run-policy.json"))
   const scoring = readJson<ScoringConfig>(join(CONFIG_DIR, "scoring.json"))
   const pub = readJson<TaskSuiteFile>(join(CONFIG_DIR, "tasks-public.json"))
-  const interceptor = readJson<TaskSuiteFile>(join(CONFIG_DIR, "tasks-interceptor.json"))
+  const interceptorTasksPath = fileExists(join(CONFIG_DIR, "tasks-interceptor.json"))
+    ? join(CONFIG_DIR, "tasks-interceptor.json")
+    : join(CONFIG_DIR, "tasks-slop.json")
+  const interceptor = readJson<TaskSuiteFile>(interceptorTasksPath)
   return {
     conditions,
     models,

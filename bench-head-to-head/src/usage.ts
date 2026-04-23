@@ -25,6 +25,7 @@ export function parseCodexJsonl(raw: string, wallClockSeconds: number, totalCost
   let commands = 0
   let errors = 0
   const commandLog: string[] = []
+  const toolLog: string[] = []
 
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue
@@ -45,6 +46,8 @@ export function parseCodexJsonl(raw: string, wallClockSeconds: number, totalCost
           const command = item.command as string
           commandLog.push(command)
           classifyInterceptor(command, telemetry)
+        } else if (typeof item.type === "string" && !["agent_message", "todo_list"].includes(item.type)) {
+          toolLog.push(item.type)
         }
       }
     } catch {
@@ -64,6 +67,7 @@ export function parseCodexJsonl(raw: string, wallClockSeconds: number, totalCost
     command_count: commands,
     error_count: errors,
     command_log: commandLog,
+    tool_log: toolLog,
     interceptor_telemetry: telemetry,
   }
 }

@@ -1,4 +1,5 @@
 import "./content/net-buffer"
+import "./content/canvas-bridge"
 import "./content/dom-observer"
 import "./content/monitor"
 import { extractLinkedInEventDom } from "./linkedin/event-page-dom-extraction"
@@ -9,7 +10,7 @@ import { cacheSnapshot, computeSnapshotDiff } from "./content/snapshot-diff"
 import { pruneStaleRefs } from "./content/ref-registry"
 import { buildA11yTree } from "./content/a11y-tree"
 import { getPageState } from "./content/state"
-import { dispatchClickSequence, dispatchKeySequence, waitForDomStable } from "./content/input-simulation"
+import { dispatchClickSequence, dispatchKeySequence, resolveElement, waitForDomStable } from "./content/input-simulation"
 import { handleClick, handleDblclick, handleRightclick, handleClickAt, handleWhatAt } from "./content/actions/click"
 import { handleInputText, handleSelectOption, handleCheck } from "./content/actions/type"
 import { handleScroll, handleScrollAbsolute, handleScrollTo, handleGetPageDimensions } from "./content/actions/scroll"
@@ -116,8 +117,17 @@ async function executeAction(action: Action): Promise<ActionResult> {
         const maxDepth = (action.depth as number) || 15
         const filter = (action.filter as string) || "interactive"
         const maxChars = (action.maxChars as number) || 50000
+        const includeStyle = action.includeStyle === true
+        const wantsTarget = action.index !== undefined || action.ref !== undefined
         pruneStaleRefs()
-        const treeOutput = buildA11yTree(document.body, 0, maxDepth, filter)
+        const root = wantsTarget
+          ? resolveElement(action.index as number | undefined, action.ref as string | undefined)
+          : document.body
+        if (wantsTarget && !root) {
+          const label = String(action.ref ?? action.index ?? "unknown")
+          return { success: false, error: `stale element [${label}] — run interceptor state to refresh` }
+        }
+        const treeOutput = buildA11yTree(root || document.body, 0, maxDepth, filter, includeStyle)
         const truncated = treeOutput.length > maxChars
           ? treeOutput.slice(0, maxChars) + "\n... (truncated)"
           : treeOutput

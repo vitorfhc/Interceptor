@@ -21,9 +21,10 @@ build_extension() {
   bun build extension/src/background.ts --outdir=extension/dist --target=browser
   bun build extension/src/content.ts --outdir=extension/dist --target=browser
   bun build extension/src/inject-net.ts --outdir=extension/dist --target=browser
+  bun build extension/src/inject-canvas.ts --outdir=extension/dist --target=browser
+  bun build extension/src/offscreen.ts --outfile=extension/dist/offscreen.js --target=browser
   cp extension/manifest.json extension/dist/
   cp extension/offscreen.html extension/dist/
-  cp extension/offscreen.js extension/dist/
   rm -rf extension/dist/icons
   cp -R extension/icons extension/dist/icons
   chmod 644 extension/dist/* 2>/dev/null || true
@@ -65,28 +66,6 @@ build_bridge() {
   bash scripts/build-bridge.sh
 }
 
-build_setup_helper() {
-  if [[ "$(uname -s)" != "Darwin" ]]; then
-    echo "Skipping interceptor-setup (not on macOS)"
-    return 0
-  fi
-  echo "Building interceptor-setup (macOS helper)..."
-  bun build setup-helper/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/interceptor-setup
-}
-
-build_app() {
-  if ! command -v swift >/dev/null 2>&1; then
-    echo "Skipping Interceptor.app (swift toolchain not found)"
-    return 0
-  fi
-  if [[ "$(uname -s)" != "Darwin" ]]; then
-    echo "Skipping Interceptor.app (not on macOS)"
-    return 0
-  fi
-  echo "Building Interceptor.app bundle..."
-  bash scripts/build-app.sh
-}
-
 build_extension
 
 if [[ "$BUILD_ALL" == "1" ]]; then
@@ -94,18 +73,12 @@ if [[ "$BUILD_ALL" == "1" ]]; then
   build_macos
   build_windows
   build_bridge
-  build_setup_helper
-  build_app
 elif [[ "$TARGET" == "host" ]]; then
   build_host
   build_bridge
-  build_setup_helper
-  build_app
 elif [[ "$TARGET" == "macos" ]]; then
   build_macos
   build_bridge
-  build_setup_helper
-  build_app
 elif [[ "$TARGET" == "windows" ]]; then
   build_windows
 else
@@ -120,8 +93,7 @@ if [[ "$BUILD_ALL" == "1" ]]; then
   echo "  Host Daemon: daemon/interceptor-daemon"
   echo "  macOS CLI:  dist/interceptor"
   echo "  macOS Daemon: daemon/interceptor-daemon"
-  echo "  macOS Setup Helper: dist/interceptor-setup"
-  echo "  macOS App Bundle: dist/Interceptor.app"
+  echo "  macOS Bridge: dist/interceptor-bridge"
   echo "  Windows CLI: dist/interceptor.exe"
   echo "  Windows Daemon: daemon/interceptor-daemon.exe"
 elif [[ "$TARGET" == "windows" ]]; then
@@ -131,7 +103,6 @@ else
   echo "  CLI:       dist/interceptor"
   echo "  Daemon:    daemon/interceptor-daemon"
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    echo "  Setup:     dist/interceptor-setup"
-    echo "  App:       dist/Interceptor.app"
+    echo "  Bridge:    dist/interceptor-bridge"
   fi
 fi

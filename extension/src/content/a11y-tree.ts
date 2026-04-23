@@ -1,6 +1,6 @@
 import { isVisible, isInteractive, INTERACTIVE_TAGS, INTERACTIVE_ROLES, getShadowRoot } from "./element-discovery"
 import { getOrAssignRef } from "./ref-registry"
-import { getRelevantAttrs } from "./element-tree"
+import { getRelevantAttrs, getStyleBundle } from "./element-tree"
 
 export const LANDMARK_ROLES = new Set(["banner", "navigation", "main", "complementary", "contentinfo", "search", "form", "region"])
 export const LANDMARK_TAGS = new Set(["NAV", "MAIN", "ASIDE", "HEADER", "FOOTER", "FORM", "SECTION"])
@@ -90,7 +90,7 @@ export function getAccessibleName(el: Element): string {
   return (el.textContent || "").trim().slice(0, 80)
 }
 
-export function buildA11yTree(root: Element, depth: number, maxDepth: number, filter: string): string {
+export function buildA11yTree(root: Element, depth: number, maxDepth: number, filter: string, includeStyle = false): string {
   if (depth > maxDepth) return ""
   const lines: string[] = []
 
@@ -122,7 +122,9 @@ export function buildA11yTree(root: Element, depth: number, maxDepth: number, fi
       const nameStr = name ? ` "${name}"` : ""
       const attrs = getRelevantAttrs(el)
       const attrStr = attrs ? ` ${attrs}` : ""
-      lines.push(`${indent}[${refId}] ${role || tag}${nameStr}${attrStr}`)
+      const styleBundle = includeStyle ? getStyleBundle(el) : ""
+      const styleStr = styleBundle ? ` style="${styleBundle}"` : ""
+      lines.push(`${indent}[${refId}] ${role || tag}${nameStr}${attrStr}${styleStr}`)
     }
 
     const shadow = getShadowRoot(el)

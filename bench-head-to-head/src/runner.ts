@@ -1,10 +1,11 @@
 import { appendFileSync, readFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { startCondition, startFixtureServer, stopCondition, stopFixtureServer, runPreflight, resetInterceptorManagedTabs } from "./lifecycle"
 import { writeReports } from "./reporter"
 import { runJudge } from "./judge"
 import { parseCodexJsonl } from "./usage"
-import { validateCommandPolicy } from "./validation"
+import { validateCommandPolicy, validateFinalAnswerPolicy } from "./validation"
 import { deterministicGrade } from "./validators"
 import { artifactDirFor, BENCH_ROOT, ensureDir, fileExists, loadConfig, nowStamp, schemaPath, shellResult, writeJson, writeText } from "./utils"
 import type { AgentFinalMessage, BenchConfig, ConditionDef, RunEnvironment, RunResult, RunSpec, TaskDef } from "./types"
@@ -13,13 +14,16 @@ function environment(config: BenchConfig): RunEnvironment {
   const interceptorStatus = shellResult("interceptor status", { timeoutMs: 10_000 })
   const axiHelp = shellResult("chrome-devtools-axi --version", { timeoutMs: 10_000 })
   const browser = shellResult("interceptor tabs --json", { timeoutMs: 10_000 })
+  const axiCommit = process.env.AXI_REPO_PATH
+    ? shellResult("git rev-parse HEAD", { cwd: process.env.AXI_REPO_PATH, timeoutMs: 10_000 }).stdout.trim() || undefined
+    : undefined
   return {
     os: shellResult("sw_vers -productVersion", { timeoutMs: 10_000 }).stdout.trim() || process.platform,
     browser: browser.ok ? "browser-present" : "unknown",
     interceptorVersion: interceptorStatus.ok ? "0.1.0" : undefined,
     axiVersion: axiHelp.ok ? axiHelp.stdout.trim() : undefined,
     interceptorCommit: shellResult("git rev-parse HEAD", { timeoutMs: 10_000 }).stdout.trim() || undefined,
-    axiCommit: shellResult("git -C /tmp/axi-bench.4WAiiL rev-parse HEAD", { timeoutMs: 10_000 }).stdout.trim() || undefined,
+    axiCommit,
     fixtureVersion: shellResult("git rev-parse HEAD", { timeoutMs: 10_000 }).stdout.trim() || undefined,
     codexModel: config.models.agent.model,
   }
@@ -58,12 +62,27 @@ function codexCommand(config: BenchConfig, condition: ConditionDef, task: TaskDe
   ].join(" ")
 }
 
+function benchmarkAgentCwd(spec: RunSpec): string {
+  const cwd = join(tmpdir(), "interceptor-bench-work", spec.condition, spec.suite, spec.taskId, `run${spec.run}`)
+  ensureDir(cwd)
+  return cwd
+}
+
 function parseFinal(artifactDir: string): AgentFinalMessage {
   const path = join(artifactDir, "final-answer.json")
   if (!fileExists(path)) {
     return { answer: "", evidence: [] }
   }
   return JSON.parse(readFileSync(path, "utf-8")) as AgentFinalMessage
+}
+
+function invalidGrade(reason: string) {
+  return {
+    pass: false as const,
+    score: 0 as const,
+    reason,
+    mode: "invalid" as const,
+  }
 }
 
 export function runOne(spec: RunSpec, config = loadConfig()): RunResult {
@@ -91,7 +110,10 @@ export function runOne(spec: RunSpec, config = loadConfig()): RunResult {
   let wallClock = 0
   if (!setupError) {
     const started = Date.now()
-    agentResult = shellResult(codexCommand(config, condition, task, artifactDir), { cwd: BENCH_ROOT, timeoutMs: config.runPolicy.timeoutSeconds * 1000 })
+    agentResult = shellResult(codexCommand(config, condition, task, artifactDir), {
+      cwd: benchmarkAgentCwd(spec),
+      timeoutMs: config.runPolicy.timeoutSeconds * 1000,
+    })
     wallClock = (Date.now() - started) / 1000
   }
 
@@ -100,12 +122,26 @@ export function runOne(spec: RunSpec, config = loadConfig()): RunResult {
 
   const usage = parseCodexJsonl(agentResult.stdout, wallClock, config.models.costModel.enabled ? 0 : null)
   const final = parseFinal(artifactDir)
-  const policyViolation = !setupError ? validateCommandPolicy(condition, usage.command_log) : null
+  const finalPath = join(artifactDir, "final-answer.json")
+  const policyViolation = !setupError ? validateCommandPolicy(condition, usage) : null
+  const answerPolicyViolation = !setupError && fileExists(finalPath) ? validateFinalAnswerPolicy(final) : null
   const grade = setupError
-    ? { pass: false, score: 0, reason: `Setup failure: ${setupError}`, mode: "deterministic" as const }
+    ? invalidGrade(`Setup failure: ${setupError}`)
+    : !agentResult.ok
+      ? invalidGrade(`Agent invocation failed: ${agentResult.stderr || agentResult.stdout || "unknown error"}`)
+      : !fileExists(finalPath)
+        ? invalidGrade("Missing final answer file.")
     : policyViolation
-      ? { pass: false, score: 0, reason: policyViolation, mode: "deterministic" as const }
-      : deterministicGrade(task, final) ?? runJudge(task, final, config.models, artifactDir)
+      ? invalidGrade(policyViolation)
+      : answerPolicyViolation
+        ? invalidGrade(answerPolicyViolation)
+        : (() => {
+            const deterministic = deterministicGrade(task, final)
+            if (deterministic) return deterministic
+            const judged = runJudge(task, final, config.models, artifactDir)
+            if (judged.reason.startsWith("Judge invocation failed:")) return invalidGrade(judged.reason)
+            return judged
+          })()
 
   writeJson(join(artifactDir, "usage.json"), usage)
   writeJson(join(artifactDir, "grade.json"), grade)

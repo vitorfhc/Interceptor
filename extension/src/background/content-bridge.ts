@@ -67,7 +67,7 @@ export async function sendNetDirect(
   tabId: number,
   msg: { type: string; [key: string]: unknown }
 ): Promise<unknown> {
-  return new Promise((resolve) => {
+  const sendOnce = (): Promise<{ success: boolean; error?: string; data?: unknown }> => new Promise((resolve) => {
     chrome.tabs.sendMessage(tabId, msg, { frameId: 0 } as chrome.tabs.MessageSendOptions, (response) => {
       if (chrome.runtime.lastError) {
         resolve({ success: false, error: chrome.runtime.lastError.message })
@@ -76,6 +76,25 @@ export async function sendNetDirect(
       }
     })
   })
+
+  const first = await sendOnce()
+  if (first.success || !shouldRetryContentScript(first.error)) return first
+
+  const injected = await injectContentScript(tabId, 0)
+  if (!injected.success) {
+    return {
+      success: false,
+      error: `content script unavailable on tab ${tabId} and reinjection failed: ${injected.error}`
+    }
+  }
+
+  const retried = await sendOnce()
+  if (retried.success) return retried
+
+  return {
+    success: false,
+    error: `content script re-injected on tab ${tabId} but message still failed: ${retried.error || "unknown error"}`
+  }
 }
 
 export function waitForTabLoad(

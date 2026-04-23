@@ -35,12 +35,12 @@ This document describes the live architecture as of the current monitor, CSP-fal
 - **Extension** is an MV3 service worker plus content scripts + a MAIN-world inject script. It owns DOM capture, ref assignment, monitor session in-memory state, network monkey-patching, and scene-graph access for rich editors.
 - **Bridge** is a Swift LaunchAgent-style daemon that exposes macOS-native capabilities (AX tree, CGEvent input, ScreenCaptureKit, AVFoundation audio, Vision/NLP frameworks).
 
-### Packaged macOS distribution
+### CLI-first browser install
 
-- The public macOS artifact is a signed/notarized DMG that stages `Interceptor.app`, an `Applications` symlink, and an uninstall command.
-- `Interceptor.app` bundles the host app, CLI, daemon, bridge, setup helper, extension payload, LaunchAgent plist, and Sparkle updater framework.
-- First launch from `/Applications` completes browser/profile onboarding, writes `~/.interceptor/bin` wrappers, registers the bundled helper via `SMAppService`, and installs the native messaging host manifest into every installed supported Chromium-family browser root.
-- `interceptor macos trust` is an app-owned permission snapshot. Runtime health still depends on the daemon/bridge path exposed by `interceptor status`.
+- The primary repo install path builds `dist/interceptor`, `daemon/interceptor-daemon`, and `extension/dist/`, then runs `scripts/install.sh --brave --profile <profile>`.
+- `scripts/install.sh` writes native messaging host manifests for Chrome and Brave, then launches Brave with `--load-extension=extension/dist`. If Brave is already running, the script prompts before quitting and relaunching it.
+- Google Chrome branded desktop builds ignore `--load-extension`; the Chrome CLI path installs native messaging metadata, but the unpacked extension must be loaded manually from `chrome://extensions`.
+- `interceptor macos trust` is a permission snapshot for native macOS automation. Browser runtime health should be checked through `interceptor status`, which confirms daemon, extension, and browser bridge state.
 
 ---
 
@@ -181,6 +181,20 @@ Caps: 64 KiB per entry, JSON / text / XML / JS content types only, conservative 
 - **SSE:** `inject-net.ts` recognizes `text/event-stream` responses, dispatches per-chunk events; `net-buffer.ts` assembles streams.
 - **Active (CDP-based):** `extension/src/background/cdp.ts` + `cdp-network-actions.ts` provide raw debugger network capture for cases where passive isn't enough. Shows the yellow infobanner — opt-in.
 
+### Frame-aware read surfaces
+
+`interceptor read --include-frames` is routed by `cli/commands/compound.ts` to `frames_read_tree` in `extension/src/background/capabilities/frames.ts`. The background handler uses `chrome.webNavigation.getAllFrames({ tabId })`, sends `get_a11y_tree` into each reachable frame, and rewrites non-top refs from `[eN]` to `[e<frameId>_<N>]` before returning the combined tree.
+
+Framed refs are round-trippable. `parseElementTarget` preserves `frameId` and `ref`, `buildReadTreeAction` passes them into `frames_read_tree`, and the frame handler filters to the requested frame before asking the content script for the subtree. Content-side `get_a11y_tree`, `extract_text`, and `extract_html` accept both `index` and `ref`, so `interceptor read e22_1 --tree-only --include-frames` returns the child-frame subtree instead of the whole multi-frame page.
+
+### Canvas observability
+
+`extension/src/inject-canvas.ts` runs in MAIN world and wraps canvas APIs such as `getContext`, `fillText`, `strokeText`, `fillRect`, path drawing, and image drawing. It stores a page-local `window.__interceptorCanvasObserver` with three buffers: raw operation log entries, derived objects, and registered canvas metadata. HTML canvas metadata includes DOM order as `domIndex`, which is the index shown by `interceptor canvas list`.
+
+`extension/src/background/capabilities/canvas.ts` exposes the CLI-facing canvas actions. `canvas status` combines DOM canvas discovery with host/app-model signals. `canvas log [N]` and `canvas objects [N]` execute self-contained page-world summary functions against the observer, resolve DOM canvas index `N` to the observer's internal `canvasId`, and then filter logs or derived objects to that canvas. This keeps multi-canvas pages separated while preserving global queries when no index is supplied.
+
+`canvas model` inspects host-specific state such as hidden Google Docs mirrors and Excalidraw-like globals/localStorage. `canvas routes` ranks passive network entries that look like canvas/editor persistence routes. `canvas read` exports pixels from DOM or WebGL canvases; `canvas ocr` is present but should be treated as experimental until its offscreen OCR path is revalidated.
+
 ### Page-world eval on strict-CSP sites
 
 `extension/src/background/capabilities/evaluate.ts` now treats page CSP as a first-class runtime concern. On a `MAIN`-world eval failure that matches a CSP/`unsafe-eval` pattern, it installs a tab-scoped **session** `declarativeNetRequest` rule that strips `content-security-policy` and `content-security-policy-report-only`, reloads the tab, then retries once. This is the behavior proven against OpenStreetMap during live validation.
@@ -230,8 +244,10 @@ For screenshot saving, `interceptor-bridge/Sources/Domains/CaptureDomain.swift` 
 | `extension/dist/background.js` | `extension/src/background.ts` (Bun bundle, target=browser) | MV3 service worker |
 | `extension/dist/content.js` | `extension/src/content.ts` (Bun bundle, target=browser) | Content script |
 | `extension/dist/inject-net.js` | `extension/src/inject-net.ts` (Bun bundle, target=browser) | MAIN-world net interceptor |
+| `extension/dist/inject-canvas.js` | `extension/src/inject-canvas.ts` (Bun bundle, target=browser) | MAIN-world canvas observer |
+| `extension/dist/offscreen.js` | `extension/src/offscreen.ts` (Bun bundle, target=browser) | Extension offscreen worker for OCR/image helpers |
 
-`bash scripts/build.sh` builds the extension + CLI + daemon. The Swift bridge is built separately via `bash scripts/build-bridge.sh` (it requires Swift toolchain).
+`bash scripts/build.sh` builds the extension, CLI, daemon, and macOS bridge when Swift is available. Windows builds skip the macOS bridge.
 
 ---
 
@@ -239,6 +255,9 @@ For screenshot saving, `interceptor-bridge/Sources/Domains/CaptureDomain.swift` 
 
 Recent major additions reflected in this document:
 
+- CLI-first Brave install path through `scripts/install.sh --brave --profile <profile>`
+- frame-targeted `read --include-frames` with subtree refs preserved end-to-end
+- canvas observer summaries that filter `log` and `objects` by DOM canvas index
 - document-scoped monitor sessions with child-tab handoff and focus-follow
 - transport hardening around disconnected native ports
 - strict-CSP `eval --main` fallback via tab-scoped CSP stripping and retry

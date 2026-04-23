@@ -32,6 +32,54 @@ export function parseScreenshotCommand(filtered: string[]): Action {
       switch (filtered[1]) {
         case "list":
           return { type: "canvas_list" }
+        case "status": {
+          const a: Action = { type: "canvas_status" }
+          if (filtered.includes("--limit")) a.limit = parseInt(filtered[filtered.indexOf("--limit") + 1])
+          return a
+        }
+        case "log": {
+          const a: Action = { type: "canvas_log" }
+          const maybeIndex = filtered[2]
+          if (maybeIndex && !maybeIndex.startsWith("--")) a.canvasIndex = parseInt(maybeIndex)
+          if (filtered.includes("--kind")) {
+            const raw = filtered[filtered.indexOf("--kind") + 1]
+            a.kinds = raw.split(",").map((s) => s.trim()).filter(Boolean)
+          }
+          if (filtered.includes("--limit")) a.limit = parseInt(filtered[filtered.indexOf("--limit") + 1])
+          return a
+        }
+        case "objects": {
+          const a: Action = { type: "canvas_objects" }
+          const maybeIndex = filtered[2]
+          if (maybeIndex && !maybeIndex.startsWith("--")) a.canvasIndex = parseInt(maybeIndex)
+          if (filtered.includes("--kind")) a.kind = filtered[filtered.indexOf("--kind") + 1]
+          if (filtered.includes("--limit")) a.limit = parseInt(filtered[filtered.indexOf("--limit") + 1])
+          return a
+        }
+        case "model": {
+          const a: Action = { type: "canvas_model" }
+          if (filtered.includes("--limit")) a.limit = parseInt(filtered[filtered.indexOf("--limit") + 1])
+          return a
+        }
+        case "routes": {
+          const a: Action = { type: "canvas_routes" }
+          if (filtered.includes("--filter")) a.filter = filtered[filtered.indexOf("--filter") + 1]
+          if (filtered.includes("--limit")) a.limit = parseInt(filtered[filtered.indexOf("--limit") + 1])
+          return a
+        }
+        case "ocr": {
+          const idx = parseInt(filtered[2] || "")
+          if (Number.isNaN(idx)) {
+            console.error("error: interceptor canvas ocr requires a canvas index")
+            process.exit(1)
+          }
+          const a: Action = { type: "canvas_ocr", canvasIndex: idx }
+          if (filtered.includes("--region")) {
+            const rp = filtered[filtered.indexOf("--region") + 1].split(",").map(Number)
+            a.region = { x: rp[0], y: rp[1], width: rp[2], height: rp[3] }
+          }
+          return a
+        }
         case "read": {
           const crAction: Action = { type: "canvas_read", canvasIndex: parseInt(filtered[2]) }
           if (filtered.includes("--format")) crAction.format = filtered[filtered.indexOf("--format") + 1]
@@ -50,7 +98,7 @@ export function parseScreenshotCommand(filtered: string[]): Action {
           return cdAction
         }
         default:
-          console.error("error: unknown canvas subcommand. Use: list, read, diff")
+          console.error("error: unknown canvas subcommand. Use: list, status, log, objects, model, routes, ocr, read, diff")
           process.exit(1)
       }
       break
