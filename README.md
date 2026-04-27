@@ -190,6 +190,7 @@ The recommended install path for end users is the signed `.pkg` documented in [I
 #### Prerequisites
 
 - [Bun](https://bun.sh/) runtime
+<<<<<<< HEAD
 - Brave Browser (or Chrome — see Chrome path below)
 - Xcode command line tools (only required if you want to build the macOS bridge)
 
@@ -203,6 +204,12 @@ The recommended install path for end users is the signed `.pkg` documented in [I
 | **`--full`** | Everything in browser-only **plus** the Swift bridge `.app`, the LaunchAgent, and the macOS subcommands | Screen Recording, Accessibility, Apple Events (per-target-app on first dispatch) | You need `interceptor macos *` (native AX tree, OS-level input, ScreenCaptureKit, Vision/Speech/NLP). macOS only. |
 
 If you don't pass either flag, the script prompts. The default in the prompt is `--full` on macOS, `--browser-only` everywhere else.
+=======
+- [Brave Browser](https://brave.com/download/)
+  - **macOS:** `brew install --cask brave-browser`
+  - **Windows:** `winget install Brave.Brave` (or `choco install brave`)
+  - **Linux:** `sudo snap install brave` or `flatpak install flathub com.brave.Browser`. For native package-manager installs (apt/dnf/zypper/AUR), see the [official Linux guide](https://brave.com/linux/).
+>>>>>>> fb06399 (docs(readme): link Brave in Prerequisites and add platform install hints)
 
 #### Build and Install
 
