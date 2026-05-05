@@ -767,9 +767,15 @@ After installing, check and grant required permissions:
 
 ```bash
 interceptor macos trust                          # Permission snapshot + System Settings paths
-interceptor macos trust --prompt                 # Ask macOS to register Interceptor in Accessibility
-interceptor macos trust --walkthrough            # Prompt + open the next relevant Privacy pane
+interceptor macos trust --no-prompt              # Forced read-only (overrides every other prompt flag)
+interceptor macos trust --prompt                 # Fire all three TCC prompts (non-blocking)
+interceptor macos trust --walkthrough            # Prompt + open the next missing Privacy pane
+interceptor macos trust --accessibility-prompt   # Single-permission prompt
+interceptor macos trust --screen-prompt          # Single-permission prompt
+interceptor macos trust --microphone-prompt      # Single-permission prompt
 ```
+
+Every field — top-level `accessibility` / `screenRecording` / `microphone` plus `permissions[].status` — is a string drawn from Apple's `AVAuthorizationStatus` vocabulary: `granted | denied | not_determined | restricted`. AX and Screen Recording entries carry a `limitation` field because Apple's `AXIsProcessTrusted` / `CGPreflightScreenCaptureAccess` return `Bool` only and can't surface `not_determined` / `restricted`. The microphone prompt is non-blocking — when the user hasn't responded yet the response carries `microphone: "not_determined"` plus `pending_user_action: ["Microphone"]`; re-poll `interceptor macos trust` to observe the resolved state. The first time the mic prompt fires, the bridge briefly upgrades its activation policy to `.regular` (you'll see a Dock icon for ~5 s) so macOS surfaces a real modal dialog instead of a transient banner — same canonical pattern Hammerspoon and Bartender use for LSUIElement utilities.
 
 Treat `interceptor macos trust` as a permission snapshot. Use `interceptor status` to confirm the daemon, helper, and bridge socket are actually alive before debugging native runtime failures.
 
@@ -785,12 +791,15 @@ Grant permissions in: System Settings → Privacy & Security → [Permission] �
 ## macOS Quick Start
 
 ```bash
-interceptor macos open "Finder"                  # Activate + tree + windows (one call)
+interceptor macos open "Finder"                  # Tree + windows (background-first; pass --activate to foreground)
+interceptor macos open "Finder" --activate       # Explicit foregrounding opt-in
 interceptor macos read                           # Tree + frontmost app info
-interceptor macos act e5                         # Click + wait + updated tree
-interceptor macos act e3 "hello"                 # Type + wait + updated tree
+interceptor macos act e5                         # Click + wait + updated tree (AX press; no focus change)
+interceptor macos act e3 "hello"                 # Type + wait + updated tree (AX value-set; no focus change)
 interceptor macos inspect                        # Tree + apps + frontmost info
 ```
+
+Background-first contract: only `interceptor macos app activate <app>` and `interceptor macos open <app> --activate` are allowed to move the user's frontmost window. Every other macOS verb leaves focus alone.
 
 ## macOS Commands
 
@@ -817,32 +826,41 @@ interceptor macos move e1 --x 0 --y 25           # Move window
 interceptor macos resize e1 --width 672 --height 983  # Resize window
 ```
 
-### Daily-Driver Domain 2: Input (CGEvent — OS-level trusted)
+### Daily-Driver Domain 2: Input (AX-first, PID-routed CGEvent fallback)
 
 ```bash
-interceptor macos click e5                       # Click AX element by ref
-interceptor macos click 500,300                  # Click at coordinates
+interceptor macos click e5                       # AX press on the ref — no focus change
+interceptor macos click 500,300 --app "TextEdit" # CGEvent.postToPid → no focus change
+interceptor macos click 500,300                  # CGEvent on system HID tap → follows frontmost (legacy)
 interceptor macos click e5 --double              # Double-click
 interceptor macos click e5 --right               # Right-click
-interceptor macos type e5 "hello world"          # Focus + type
-interceptor macos type "hello world"             # Type at current focus
-interceptor macos keys "Meta+C"                  # Keyboard shortcut
-interceptor macos scroll e5 --down 300           # Scroll
-interceptor macos drag e5 e8                     # Drag between elements
+interceptor macos type e5 "hello world"          # AX value-set on text-bearing role; no focus change
+interceptor macos type "hello" --app "TextEdit"  # PID-routed keys; no focus change
+interceptor macos type "hello world"             # Type at current focus (legacy fallback)
+interceptor macos keys "Meta+C" --app "TextEdit" # PID-routed combo; no focus change
+interceptor macos keys "Meta+C"                  # System HID tap (legacy)
+interceptor macos scroll down --app "Signal"     # PID-routed scroll on backgrounded app
+interceptor macos drag e5 e8                     # Drag between refs
+interceptor macos drag 100,100 200,200 --app X   # PID-routed coordinate drag
 ```
 
-When AX actions fail, interceptor auto-escalates to CGEvent click using the element's frame coordinates.
+Routing rule: when a ref is provided, input goes through AX (`AXUIElementPerformAction(kAXPressAction)` for clicks; `AXUIElementSetAttributeValue(kAXValueAttribute, ...)` for text-bearing roles). When `--app` or `--pid` is provided, synthesized events post via `CGEvent.postToPid` — the target does NOT need to be frontmost. With neither, input falls back to the system HID tap and follows the user's current frontmost app.
+
+Each input verb returns a routing tag in its success message: `"ax-pressed ref"`, `"ax-set value (N chars)"`, `"clicked … → pid=NNNN"`, or `"clicked … → frontmost"`. If you see `→ frontmost` when you expected per-PID delivery, the target wasn't resolvable — pass `--app` or `--pid`.
 
 ### Daily-Driver Domain 3: Capture (ScreenCaptureKit)
 
 ```bash
 interceptor macos screenshot                     # Frontmost window
 interceptor macos screenshot --app "Finder"      # Specific app (works occluded / minimized / cross-Space)
-interceptor macos screenshot --save              # Save to disk
+interceptor macos screenshot --save              # Save to disk; payload key is `filePath` (not `path`)
 interceptor macos capture start                  # Continuous 30fps capture
-interceptor macos capture frame                  # Get latest frame
+interceptor macos capture frame                  # Get latest frame; blocks ≤3000ms for first frame
+interceptor macos capture frame --timeout-ms 5000  # Override the wait window for first-frame delivery
 interceptor macos capture stop                   # Stop
 ```
+
+The `--save` response contains `{ "filePath": "...", "format": ..., "bytes": ..., "width": ..., "height": ... }`. Read `filePath` for the path on disk.
 
 ### Daily-Driver Domain 4: Monitor (Teach and Replay)
 
@@ -895,6 +913,8 @@ interceptor macos menu "File" "New Folder"       # Invoke menu item by path
 ```bash
 interceptor macos audio output start             # Capture system audio
 interceptor macos audio input start              # Capture microphone
+interceptor macos audio input start --save       # Capture mic AND write CAF file to /tmp/interceptor-audio-input-<unix-ts>.caf
+interceptor macos audio input stop               # Stop; response carries `filePath` when --save was set
 ```
 
 #### Speech & Voice Activity
@@ -947,10 +967,16 @@ interceptor macos notifications tail             # Live notification stream
 #### Trust & Permissions
 
 ```bash
-interceptor macos trust                          # Check all permissions with System Settings paths
-interceptor macos trust --prompt                 # Ask macOS to register Interceptor in Accessibility
-interceptor macos trust --walkthrough            # Prompt + open next relevant Privacy pane
+interceptor macos trust                          # Read-only snapshot (status strings + System Settings paths)
+interceptor macos trust --no-prompt              # Forced read-only — overrides every other prompt flag
+interceptor macos trust --prompt                 # Fire all three TCC prompts (non-blocking)
+interceptor macos trust --walkthrough            # Prompt + auto-open next missing Privacy pane
+interceptor macos trust --accessibility-prompt   # Single-permission prompt
+interceptor macos trust --screen-prompt          # Single-permission prompt
+interceptor macos trust --microphone-prompt      # Single-permission prompt
 ```
+
+Every status is a string from Apple's `AVAuthorizationStatus` vocabulary (`granted | denied | not_determined | restricted`). Mic prompt is non-blocking — re-poll to observe the user's response. See [Permissions](#permissions) above for the response-shape details.
 
 #### Files & Filesystem
 
@@ -1048,6 +1074,16 @@ interceptor macos screenshot --app "Signal"      # Capture occluded window via C
 interceptor macos tree --app "Signal"            # AX read auto-wakes via AXManualAccessibility
 interceptor macos scroll down --app "Signal" --times 3   # Routes via CGEvent.postToPid
 interceptor macos intent dispatch --bundle org.whispersystems.signal-desktop --script '...'
+```
+
+End-to-end "type into a backgrounded TextEdit while another app stays frontmost":
+
+```bash
+interceptor macos open "TextEdit"                            # background-first; reads AX state
+REF=$(interceptor macos focused --app "TextEdit" --json | jq -r '.ref')
+interceptor macos type "$REF" "hello, background world"      # → "ax-set value (...)"
+interceptor macos value "$REF"                               # confirms the text landed
+interceptor macos frontmost                                  # whatever was frontmost is unchanged
 ```
 
 ## macOS Safety

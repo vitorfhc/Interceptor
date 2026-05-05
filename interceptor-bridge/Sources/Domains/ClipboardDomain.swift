@@ -9,7 +9,11 @@ final class ClipboardDomain: DomainHandler, @unchecked Sendable {
     private var monitorTimer: DispatchSourceTimer?
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        switch command {
+        // Router sends command = "clipboard" because the action type is
+        // two-segment (`macos_clipboard`). The CLI parser puts the real
+        // sub-verb on action["sub"]. Mirror CompoundDomain's contract.
+        let sub = action["sub"] as? String ?? command
+        switch sub {
         case "read":
             readClipboard(action, completion: completion)
         case "write":
@@ -23,7 +27,7 @@ final class ClipboardDomain: DomainHandler, @unchecked Sendable {
         case "types":
             getTypes(completion: completion)
         default:
-            notImplemented(command, completion: completion)
+            notImplemented(sub, completion: completion)
         }
     }
 

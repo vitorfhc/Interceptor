@@ -12,12 +12,14 @@ import {
   updateSessionMeta,
 } from "../shared/monitor-artifacts"
 import { chooseOutboundTransport } from "./outbound-routing"
+import { formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
 
 // ── Native Bridge (interceptor-bridge) connection ────────────────────────────────
 const BRIDGE_SOCKET_PATH = "/tmp/interceptor-bridge.sock"
 const BRIDGE_PID_PATH = "/tmp/interceptor-bridge.pid"
 const BRIDGE_RECONNECT_MS = 2000
 const BRIDGE_CONNECT_TIMEOUT_MS = 5000
+const BRIDGE_RECOVERY_ACTION_TIMEOUT_MS = 1500
 
 let bridgeSocket: ReturnType<typeof Bun.connect> extends Promise<infer T> ? T | null : never = null as any
 let bridgeBuffer = Buffer.alloc(0)
@@ -40,55 +42,63 @@ function isBridgeAlive(): boolean {
   } catch { return false }
 }
 
-function spawnBridge(): void {
-  if (bridgeSpawnAttempted) return
+function readBridgeRecoveryLayout() {
+  return getBridgeRecoveryLayout({
+    exists: existsSync,
+    home: process.env.HOME ?? "",
+    importMetaUrl: import.meta.url,
+    uid: typeof process.getuid === "function" ? process.getuid() : null,
+  })
+}
+
+async function waitForBridgeSocket(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (existsSync(BRIDGE_SOCKET_PATH)) return true
+    await Bun.sleep(100)
+  }
+  return existsSync(BRIDGE_SOCKET_PATH)
+}
+
+async function spawnBridge(): Promise<boolean> {
+  if (bridgeSpawnAttempted) return false
   bridgeSpawnAttempted = true
+  try {
+    const layout = readBridgeRecoveryLayout()
+    const actions = getBridgeRecoveryActions(layout, existsSync)
+    if (actions.length === 0) {
+      log("bridge binary not found — cannot auto-spawn")
+      return false
+    }
 
-  // Prefer launching the .app bundle via LaunchServices (`open -gj`).
-  // A direct fork-exec of the inner binary does not give the process
-  // aqua-session ancestry, so macOS silently denies Apple Events without
-  // showing the TCC consent dialog. Bundle launch fixes that — and TCC will
-  // then track the bridge by CFBundleIdentifier (com.interceptor.bridge).
-  const installedBundle = `${process.env.HOME ?? ""}/.local/share/interceptor/interceptor-bridge.app`
-  const distBundle = new URL("../dist/interceptor-bridge.app", import.meta.url).pathname
-  const candidateBundle = existsSync(installedBundle)
-    ? installedBundle
-    : (existsSync(distBundle) ? distBundle : "")
+    for (const action of actions) {
+      try {
+        log(`bridge recovery attempt: ${action.kind}`)
+        const child = spawn(action.command, action.args, { detached: true, stdio: "ignore" })
+        child.unref()
+      } catch (err) {
+        log(`bridge recovery launch failed (${action.kind}): ${(err as Error).message}`)
+        continue
+      }
 
-  if (candidateBundle) {
-    log(`spawning bridge via LaunchServices: open -gj ${candidateBundle}`)
-    const child = spawn("/usr/bin/open", ["-gj", candidateBundle], { detached: true, stdio: "ignore" })
-    child.unref()
+      if (await waitForBridgeSocket(BRIDGE_RECOVERY_ACTION_TIMEOUT_MS)) return true
+    }
+
+    return existsSync(BRIDGE_SOCKET_PATH)
+  } finally {
     setTimeout(() => { bridgeSpawnAttempted = false }, 10000)
-    return
   }
-
-  // Fallback: direct spawn of the inner binary (development builds without
-  // a bundle). Apple Events / TCC will not work in this mode — used only
-  // when the user is iterating on the Swift sources.
-  const bridgeBin = new URL("../interceptor-bridge/.build/debug/interceptor-bridge", import.meta.url).pathname
-  const releaseBin = new URL("../interceptor-bridge/.build/release/interceptor-bridge", import.meta.url).pathname
-  const distBin = new URL("../dist/interceptor-bridge", import.meta.url).pathname
-  let bin = ""
-  if (existsSync(distBin)) bin = distBin
-  else if (existsSync(releaseBin)) bin = releaseBin
-  else if (existsSync(bridgeBin)) bin = bridgeBin
-  else {
-    log("bridge binary not found — cannot auto-spawn")
-    return
-  }
-  log(`spawning bridge (bare-binary fallback, no TCC consent UI): ${bin}`)
-  const child = spawn(bin, [], { detached: true, stdio: "ignore" })
-  child.unref()
-  // Give it time to start
-  setTimeout(() => { bridgeSpawnAttempted = false }, 10000)
 }
 
 async function connectBridge(): Promise<boolean> {
   if (bridgeConnecting) return false
   if (!existsSync(BRIDGE_SOCKET_PATH)) {
-    if (!isBridgeAlive()) spawnBridge()
-    return false
+    if (!isBridgeAlive()) {
+      const recovered = await spawnBridge()
+      if (!recovered || !existsSync(BRIDGE_SOCKET_PATH)) return false
+    } else {
+      return false
+    }
   }
   bridgeConnecting = true
   try {
@@ -123,7 +133,10 @@ async function connectBridge(): Promise<boolean> {
   } catch (err) {
     log(`bridge connect failed: ${(err as Error).message}`)
     bridgeConnecting = false
-    if (!isBridgeAlive()) spawnBridge()
+    if (!isBridgeAlive()) {
+      const recovered = await spawnBridge()
+      if (recovered && existsSync(BRIDGE_SOCKET_PATH)) return connectBridge()
+    }
     return false
   }
 }
@@ -873,7 +886,10 @@ try {
                 if (connected && bridgeSocket) {
                   sendToBridge(id, action, socket, actionType)
                 } else {
-                  socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: "Interceptor bridge not running. Run scripts/build-bridge.sh && scripts/install-bridge.sh for native macOS control." } }))
+                  socketWriteFramed(socket, JSON.stringify({
+                    id,
+                    result: { success: false, error: formatBridgeUnavailableError(readBridgeRecoveryLayout()) },
+                  }))
                 }
               })
             }

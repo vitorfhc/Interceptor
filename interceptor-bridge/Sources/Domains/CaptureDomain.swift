@@ -8,8 +8,43 @@ import ImageIO
 
 final class CaptureDomain: DomainHandler, @unchecked Sendable {
     private var activeStream: SCStream?
+    // Strong reference to the SCStreamOutput we registered. Apple's
+    // SCStream.addStreamOutput(_:type:sampleHandlerQueue:) does NOT
+    // strongly retain the output object — when the local var falls out
+    // of scope, the output is deallocated and didOutputSampleBuffer
+    // never fires. Holding it on the domain keeps the callback alive
+    // for the stream's lifetime.
+    private var activeOutput: CaptureStreamOutput?
+    private var activeDelegate: CaptureStreamDelegateLogger?
     private var latestFrame: Data?
     private let lock = NSLock()
+    // Signaled by CaptureStreamOutput.onFrame each time a sample buffer
+    // arrives. handleCapture("frame", ...) waits on this so callers don't
+    // race the documented gap between SCStream.startCapture's success
+    // callback (stream "successfully starts") and the first frame
+    // delivery via SCStreamOutput.stream(_:didOutputSampleBuffer:of:).
+    // Drained at start so leftover signals from a prior run never short-
+    // circuit a fresh wait.
+    private let frameReady = DispatchSemaphore(value: 0)
+    // Test-only flag treated as "stream active" when activeStream itself
+    // is nil. Lets CaptureFrameTimingTests exercise the "stream active
+    // but no frame yet" branch without constructing a real SCStream.
+    // Never set by production code paths.
+    var testForcedActive: Bool = false
+
+    // Test-only injectors mirroring what CaptureStreamOutput would do
+    // when ScreenCaptureKit delivers a real sample buffer.
+    func _testInjectFrame(_ data: Data) {
+        lock.withLock { latestFrame = data }
+        frameReady.signal()
+    }
+    func _testReset() {
+        lock.withLock {
+            latestFrame = nil
+            testForcedActive = false
+        }
+        while frameReady.wait(timeout: .now()) == .success {}
+    }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         switch command {
@@ -297,18 +332,13 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
         case "start":
             startContinuousCapture(action, completion: completion)
         case "frame":
-            lock.lock()
-            let frame = latestFrame
-            lock.unlock()
-            if let frame = frame {
-                completion(WireFormat.success(["dataUrl": "data:image/jpeg;base64,\(frame.base64EncodedString())"]))
-            } else {
-                completion(WireFormat.error("no active capture stream — use screenshot instead"))
-            }
+            handleFrame(action, completion: completion)
         case "stop":
             lock.lock()
             activeStream?.stopCapture()
             activeStream = nil
+            activeOutput = nil
+            activeDelegate = nil
             latestFrame = nil
             lock.unlock()
             completion(WireFormat.success("capture stopped"))
@@ -317,21 +347,93 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
         }
     }
 
+    private func handleFrame(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        // Configurable wait window for first-frame delivery. Apple's
+        // SCStream.startCapture(completionHandler:) returns when the
+        // stream "successfully starts" but the first frame arrives later
+        // via SCStreamOutput.stream(_:didOutputSampleBuffer:of:). Empirical
+        // measurements on macOS 14 show 1500-2000ms cold-start latency for
+        // the first sample buffer; default to 3000ms with --timeout-ms
+        // override to match what callers actually need.
+        let timeoutMs = action["timeoutMs"] as? Int ?? 3000
+
+        // Fast path: a frame is already buffered.
+        lock.lock()
+        let streamActive = (activeStream != nil) || testForcedActive
+        let bufferedFrame = latestFrame
+        lock.unlock()
+
+        if let frame = bufferedFrame {
+            completion(WireFormat.success(["dataUrl": "data:image/jpeg;base64,\(frame.base64EncodedString())"]))
+            return
+        }
+
+        // No frame yet. Distinguish "stream not started" from "stream
+        // started but the first sample buffer hasn't been delivered."
+        if !streamActive {
+            completion(WireFormat.error("capture not started — call macos capture start first"))
+            return
+        }
+
+        // Stream is active. Block briefly waiting for the next frame.
+        // Off the caller's queue so the bridge transport stays responsive.
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self else {
+                completion(WireFormat.error("capture domain released"))
+                return
+            }
+            let result = self.frameReady.wait(timeout: .now() + .milliseconds(timeoutMs))
+            self.lock.lock()
+            let nextFrame = self.latestFrame
+            self.lock.unlock()
+            if let nextFrame = nextFrame {
+                completion(WireFormat.success(["dataUrl": "data:image/jpeg;base64,\(nextFrame.base64EncodedString())"]))
+            } else if result == .timedOut {
+                completion(WireFormat.error("capture stream active but no frame in \(timeoutMs)ms — increase --timeout-ms or use screenshot instead"))
+            } else {
+                completion(WireFormat.error("capture stream active but no frame buffered"))
+            }
+        }
+    }
+
     private func startContinuousCapture(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let appName = action["app"] as? String
+
+        // Drain leftover semaphore signals from a prior run BEFORE
+        // entering the async Task, since DispatchSemaphore.wait is
+        // unavailable from async contexts under Swift strict concurrency.
+        // Also clear any stale frame buffer.
+        while frameReady.wait(timeout: .now()) == .success {}
+        lock.withLock { latestFrame = nil }
+
         Task {
             do {
                 let content = try await SCShareableContent.current
                 let filter: SCContentFilter
+                // Track the size of the captured surface so we can set
+                // SCStreamConfiguration.width/height. ScreenCaptureKit
+                // refuses to deliver sample buffers if those are 0 (the
+                // same gotcha the takeScreenshot path already handles).
+                var captureWidth: Int = 0
+                var captureHeight: Int = 0
                 if let appName = appName,
                    let app = content.applications.first(where: { $0.applicationName == appName }),
                    let window = content.windows.first(where: { $0.owningApplication?.processID == app.processID }) {
+                    // Explicit --app target: capture that app's first
+                    // window via desktopIndependentWindow (works reliably
+                    // for AppKit apps that own a normal NSWindow).
                     filter = SCContentFilter(desktopIndependentWindow: window)
-                } else if let frontApp = NSWorkspace.shared.frontmostApplication,
-                          let window = content.windows.first(where: { $0.owningApplication?.processID == frontApp.processIdentifier }) {
-                    filter = SCContentFilter(desktopIndependentWindow: window)
+                    captureWidth = Int(window.frame.width * 2)
+                    captureHeight = Int(window.frame.height * 2)
                 } else if let display = content.displays.first {
+                    // No --app: default to display-mode capture. SCK's
+                    // desktopIndependentWindow filter against the
+                    // frontmost-app's window silently fails to deliver
+                    // frames for many non-AppKit / Electron / terminal-
+                    // host apps. Display-mode is universally reliable.
                     filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+                    captureWidth = display.width * 2
+                    captureHeight = display.height * 2
                 } else {
                     completion(WireFormat.error("no capturable content"))
                     return
@@ -339,16 +441,47 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
 
                 let config = SCStreamConfiguration()
                 config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+                // Apple's capturing-screen-content-in-macos sample sets
+                // these explicitly. Without them SCK silently delivers
+                // empty buffers and the output callback never fires.
+                if captureWidth > 0 { config.width = captureWidth }
+                if captureHeight > 0 { config.height = captureHeight }
 
                 let output = CaptureStreamOutput { [weak self] data in
-                    self?.lock.withLock { self?.latestFrame = data }
+                    guard let self = self else { return }
+                    // Discard late-arriving sample buffers that fire
+                    // after capture stop. SCK doesn't always cancel the
+                    // delivery queue immediately when stopCapture is
+                    // called, and we don't want a stale frame to leak
+                    // out of `frame` after the user has stopped.
+                    self.lock.withLock {
+                        if self.activeStream != nil {
+                            self.latestFrame = data
+                        }
+                    }
+                    self.frameReady.signal()
                 }
 
-                let stream = SCStream(filter: filter, configuration: config, delegate: nil)
+                // Pass a delegate so SCK's stream(_:didStopWithError:),
+                // streamDidBecomeActive, and streamDidBecomeInactive
+                // surface to stderr instead of vanishing silently. When
+                // delegate is nil, SCK can drop the stream after
+                // startCapture returns success and we never know.
+                let delegate = CaptureStreamDelegateLogger()
+                let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
                 try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: DispatchQueue.global())
                 try await stream.startCapture()
 
-                self.lock.withLock { self.activeStream = stream }
+                // Strong-retain stream, output, AND delegate.
+                // SCK's addStreamOutput doesn't keep the output alive,
+                // SCStream(... delegate:) holds the delegate weakly per
+                // Apple convention, and a deallocated delegate silently
+                // kills error reporting.
+                self.lock.withLock {
+                    self.activeStream = stream
+                    self.activeOutput = output
+                    self.activeDelegate = delegate
+                }
 
                 completion(WireFormat.success("continuous capture started"))
             } catch {
@@ -372,7 +505,27 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        guard type == .screen else { return }
+
+        // Per Apple's SCFrameStatus docs, SCK delivers buffers with one
+        // of: complete, idle, blank, started, suspended, stopped. Only
+        // .complete (and rarely .started) carries actual pixel data.
+        // Static windows / unchanged display frames arrive as .idle —
+        // the imageBuffer may be empty or absent. We must read the
+        // status from the sample-buffer attachments and skip non-data
+        // frames; otherwise we'd block forever on a stream whose only
+        // delivery is .idle.
+        if let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+           let attachments = attachmentsArray.first,
+           let statusRawValue = attachments[.status] as? Int,
+           let status = SCFrameStatus(rawValue: statusRawValue),
+           status != .complete {
+            // Frame is metadata-only (idle/blank/started/suspended/stopped).
+            // Skip silently; the next .complete frame will drive onFrame.
+            return
+        }
+
+        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ciImage = CIImage(cvPixelBuffer: imageBuffer)
         let context = CIContext()
         let width = CVPixelBufferGetWidth(imageBuffer)
@@ -383,5 +536,25 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
                 onFrame(data)
             }
         }
+    }
+}
+
+// SCStreamDelegate logger. Surfaces SCK lifecycle errors that would
+// otherwise vanish when delegate=nil. didStopWithError fires when
+// ScreenCaptureKit kills the stream after startCapture returned
+// success — this is the normal failure path for permission revocations,
+// content-filter mismatches, and frame-delivery deadlocks.
+@available(macOS 13.0, *)
+final class CaptureStreamDelegateLogger: NSObject, SCStreamDelegate, @unchecked Sendable {
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        Platform.log("SCK stream stopped with error: \(error.localizedDescription)")
+    }
+
+    func streamDidBecomeActive(_ stream: SCStream) {
+        Platform.log("SCK stream became active")
+    }
+
+    func streamDidBecomeInactive(_ stream: SCStream) {
+        Platform.log("SCK stream became inactive")
     }
 }

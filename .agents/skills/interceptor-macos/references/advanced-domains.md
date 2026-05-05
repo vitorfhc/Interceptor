@@ -113,12 +113,22 @@ Sensitive content analysis (NSFW detection, etc.) for vetting captured frames be
 ## Trust & Permissions
 
 ```bash
-interceptor macos trust                          # Snapshot of every permission with deep links
-interceptor macos trust --prompt                 # Register Interceptor in Accessibility
-interceptor macos trust --walkthrough            # Prompt + auto-open the next relevant Privacy pane
+interceptor macos trust                          # Read-only snapshot — every field is a status string
+interceptor macos trust --no-prompt              # Defense-in-depth read-only (overrides every other prompt flag)
+interceptor macos trust --prompt                 # Fire all three TCC prompts (non-blocking)
+interceptor macos trust --walkthrough            # Prompt + auto-open the next missing Privacy pane
+interceptor macos trust --accessibility-prompt   # Single-permission prompt
+interceptor macos trust --screen-prompt          # Single-permission prompt
+interceptor macos trust --microphone-prompt      # Single-permission prompt
 ```
 
-`trust` is the entry point for permission troubleshooting. The walkthrough flow chains the prompts so a user can grant everything in one pass.
+`trust` is the entry point for permission troubleshooting. Every field — top-level `accessibility` / `screenRecording` / `microphone` plus `permissions[].status` — is a string drawn from Apple's `AVAuthorizationStatus` vocabulary: `granted | denied | not_determined | restricted`. Apple's AX and Screen Recording APIs return `Bool` only, so those entries can only ever surface `granted` or `denied`; both carry a `limitation` field documenting the asymmetry. Microphone entries surface all four values and never carry `limitation`. The legacy `granted: bool` shim is still emitted for one release for backward compat — migrate to `status`.
+
+The microphone prompt is non-blocking — it returns immediately with `microphone: "not_determined"` and `pending_user_action: ["Microphone"]` while the macOS dialog is awaiting the user's response. Re-poll `trust` to observe the resolved state. Per Apple's documented `AVCaptureDevice.requestAccess(for:completionHandler:)`: *"Calling this method doesn't block the thread while the system is prompting the user for access."*
+
+When `--microphone-prompt` (or `--prompt` / `--walkthrough`) fires for the first time, `interceptor-bridge` flashes into the Dock for ~5 seconds. That is intentional. The bridge ships as `LSUIElement = true` — without temporarily upgrading `NSApp.setActivationPolicy(.regular)`, macOS surfaces the Microphone alert as a transient banner that auto-dismisses to "denied" before most users see it. The bridge upgrades to `.regular` immediately before `requestAccess` and reverts to `.accessory` in the completion handler — same pattern Hammerspoon, Bartender, and Karabiner-Elements use. Accessibility and Screen Recording prompts do not need this treatment.
+
+Two requirements per Apple's [`requesting-authorization-for-media-capture-on-macos`](https://developer.apple.com/documentation/bundleresources/requesting-authorization-for-media-capture-on-macos): `NSMicrophoneUsageDescription` in Info.plist (we ship one), and `com.apple.security.device.audio-input` as an entitlement on the signed binary (we ship one). Without either, the system terminates the request silently rather than showing the dialog.
 
 ## Display & Stream
 

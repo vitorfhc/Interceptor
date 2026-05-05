@@ -11,8 +11,11 @@ daemon/.generated/
 .DS_Store
 interceptor-screenshot-*.jpg
 interceptor-screenshot-*.png
+interceptor-screenshot-*.webp
 interceptor-macos-screenshot-*.jpg
 interceptor-macos-screenshot-*.png
+interceptor-macos-screenshot-*.webp
+interceptor-audio-input-*.caf
 prd/
 scripts/auto-improve/
 interceptor-bridge/.build/

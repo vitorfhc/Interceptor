@@ -73,23 +73,33 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         refRegistry.clear()
 
         var output = ""
-        buildTree(element: axApp, depth: 0, maxDepth: depth, filter: filter, output: &output, maxChars: maxChars)
+        buildTree(element: axApp, pid: pid, depth: 0, maxDepth: depth, filter: filter, output: &output, maxChars: maxChars)
 
         completion(WireFormat.success(output))
     }
 
     /// signal AX interest to Electron/Chromium apps so they expose
     /// their full AX tree. Idempotent — safe to call repeatedly.
+    ///
+    /// Only sets AXManualAccessibility (the Chromium-specific signal that
+    /// triggers BrowserAccessibilityManager to build its tree). We do NOT
+    /// set AXEnhancedUserInterface — that's the AppKit "screen reader is
+    /// active" flag, which many AppKit apps respond to by raising their
+    /// main window to the foreground. The bridge is background-first by
+    /// contract; setting AXEnhancedUserInterface contradicted that contract
+    /// and was the reason `interceptor macos open <app>` was still
+    /// foregrounding AppKit apps even after the CompoundDomain activation
+    /// removal. AppKit apps don't need either flag — their AX tree is
+    /// always populated. Chromium needs only AXManualAccessibility.
     static func wakeAXTree(app: AXUIElement) {
         AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         // Tiny grace so Chromium's BrowserAccessibilityManager has a chance
         // to assemble the tree before we walk it. ~30 ms is enough on M-series
         // for typical Electron renderers.
         usleep(30_000)
     }
 
-    private func buildTree(element: AXUIElement, depth: Int, maxDepth: Int, filter: String, output: inout String, maxChars: Int) {
+    private func buildTree(element: AXUIElement, pid: pid_t, depth: Int, maxDepth: Int, filter: String, output: inout String, maxChars: Int) {
         guard depth < maxDepth, output.count < maxChars else { return }
 
         let role = getStringAttribute(element, kAXRoleAttribute as CFString) ?? "unknown"
@@ -120,7 +130,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         }
 
         if shouldInclude {
-            let ref = refRegistry.register(element)
+            let ref = refRegistry.register(element, pid: pid)
             let indent = String(repeating: "  ", count: depth)
             let displayRole = role.replacingOccurrences(of: "AX", with: "").lowercased()
             var line = "\(indent)[\(ref)] \(displayRole)"
@@ -134,7 +144,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         guard childResult == .success, let childArray = children as? [AXUIElement] else { return }
 
         for child in childArray {
-            buildTree(element: child, depth: depth + 1, maxDepth: maxDepth, filter: filter, output: &output, maxChars: maxChars)
+            buildTree(element: child, pid: pid, depth: depth + 1, maxDepth: maxDepth, filter: filter, output: &output, maxChars: maxChars)
         }
     }
 
@@ -163,6 +173,22 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         return CGRect(origin: point, size: size)
     }
 
+    private func searchRootElement(for app: AXUIElement) -> AXUIElement? {
+        var focusedWindow: CFTypeRef?
+        if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
+           let window = focusedWindow {
+            return unsafeBitCast(window, to: AXUIElement.self)
+        }
+
+        var mainWindow: CFTypeRef?
+        if AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute as CFString, &mainWindow) == .success,
+           let window = mainWindow {
+            return unsafeBitCast(window, to: AXUIElement.self)
+        }
+
+        return nil
+    }
+
     private func handleFind(action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let query = action["query"] as? String else {
             completion(WireFormat.error("find requires a query"))
@@ -177,34 +203,46 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         let axApp = AXUIElementCreateApplication(pid)
         let roleFilter = action["role"] as? String
 
+        Self.wakeAXTree(app: axApp)
         refRegistry.clear()
+        let searchRoot = searchRootElement(for: axApp) ?? axApp
 
         var matches: [[String: Any]] = []
-        findElements(element: axApp, query: query.lowercased(), roleFilter: roleFilter?.lowercased(), depth: 0, maxDepth: 15, matches: &matches)
+        findElements(element: searchRoot, pid: pid, query: query.lowercased(), roleFilter: roleFilter?.lowercased(), depth: 0, maxDepth: 15, maxMatches: 25, matches: &matches)
 
         completion(WireFormat.success(matches))
     }
 
-    private func findElements(element: AXUIElement, query: String, roleFilter: String?, depth: Int, maxDepth: Int, matches: inout [[String: Any]]) {
-        guard depth < maxDepth else { return }
+    private func findElements(element: AXUIElement, pid: pid_t, query: String, roleFilter: String?, depth: Int, maxDepth: Int, maxMatches: Int, matches: inout [[String: Any]]) {
+        guard depth < maxDepth, matches.count < maxMatches else { return }
 
         let role = getStringAttribute(element, kAXRoleAttribute as CFString) ?? ""
+        let identifier = getStringAttribute(element, kAXIdentifierAttribute as CFString) ?? ""
+        let roleDescription = getStringAttribute(element, kAXRoleDescriptionAttribute as CFString) ?? ""
         let title = getStringAttribute(element, kAXTitleAttribute as CFString) ?? ""
         let desc = getStringAttribute(element, kAXDescriptionAttribute as CFString) ?? ""
         let value = getStringAttribute(element, kAXValueAttribute as CFString) ?? ""
 
         let displayRole = role.replacingOccurrences(of: "AX", with: "").lowercased()
-        let searchable = "\(title) \(desc) \(value)".lowercased()
+        let searchable = Self.buildSearchableText(
+            title: title,
+            description: desc,
+            value: value,
+            identifier: identifier,
+            roleDescription: roleDescription,
+            displayRole: displayRole
+        )
 
         if searchable.contains(query) {
             if roleFilter == nil || displayRole.contains(roleFilter!) {
-                let ref = refRegistry.register(element)
+                let ref = refRegistry.register(element, pid: pid)
                 var match: [String: Any] = [
                     "ref": ref,
                     "role": displayRole,
                     "name": title.isEmpty ? desc : title
                 ]
                 if !value.isEmpty { match["value"] = value }
+                if !identifier.isEmpty { match["identifier"] = identifier }
                 if let frame = getFrame(element) {
                     match["frame"] = ["x": frame.origin.x, "y": frame.origin.y,
                                      "width": frame.size.width, "height": frame.size.height]
@@ -217,7 +255,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success,
               let childArray = children as? [AXUIElement] else { return }
         for child in childArray {
-            findElements(element: child, query: query, roleFilter: roleFilter, depth: depth + 1, maxDepth: maxDepth, matches: &matches)
+            findElements(element: child, pid: pid, query: query, roleFilter: roleFilter, depth: depth + 1, maxDepth: maxDepth, maxMatches: maxMatches, matches: &matches)
         }
     }
 
@@ -329,7 +367,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         }
 
         let element = focused as! AXUIElement
-        let ref = refRegistry.register(element)
+        let ref = refRegistry.register(element, pid: app.processIdentifier)
         let role = getStringAttribute(element, kAXRoleAttribute as CFString) ?? "unknown"
         let title = getStringAttribute(element, kAXTitleAttribute as CFString) ?? ""
         let value = getStringAttribute(element, kAXValueAttribute as CFString)
@@ -362,7 +400,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
 
         var result: [[String: Any]] = []
         for win in windows {
-            let ref = refRegistry.register(win)
+            let ref = refRegistry.register(win, pid: app.processIdentifier)
             let title = getStringAttribute(win, kAXTitleAttribute as CFString) ?? ""
             var entry: [String: Any] = ["ref": ref, "title": title]
             if let frame = getFrame(win) {
@@ -443,13 +481,10 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
 
         let axApp = AXUIElementCreateApplication(pid)
         let notifications: [String] = [
-            kAXFocusedUIElementChangedNotification as String,
-            kAXValueChangedNotification as String,
             kAXUIElementDestroyedNotification as String,
             kAXWindowCreatedNotification as String,
             kAXWindowMovedNotification as String,
-            kAXWindowResizedNotification as String,
-            kAXSelectedTextChangedNotification as String
+            kAXWindowResizedNotification as String
         ]
 
         let refcon = Unmanaged.passUnretained(self).toOpaque()
@@ -460,5 +495,9 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         observer = obs
         observedPID = pid
+    }
+
+    static func buildSearchableText(title: String, description: String, value: String, identifier: String, roleDescription: String, displayRole: String) -> String {
+        "\(title) \(description) \(value) \(identifier) \(roleDescription) \(displayRole)".lowercased()
     }
 }

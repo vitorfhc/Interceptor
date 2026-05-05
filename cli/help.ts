@@ -220,4 +220,116 @@ Meta:
   interceptor status                         Check daemon status (local — no connection needed)
   interceptor status --verbose               Daemon + bridge + extension probe with per-component diagnostics
   interceptor status --explain               Alias for --verbose with extra rationale per component
-  interceptor help                           This help text`
+  interceptor help                           This help text
+
+Native (macOS Bridge — full install only):
+  Background-first by contract: only 'macos app activate' and 'macos open --activate'
+  move the user's frontmost window. Every other 'macos *' verb leaves focus alone.
+
+  Compound (agent-optimized):
+  interceptor macos open <app>               Tree + windows + app info (no foregrounding)
+  interceptor macos open <app> --activate    Explicit foregrounding opt-in
+  interceptor macos read [--app <name>]      Tree + frontmost app info
+  interceptor macos act <ref>                Click ref via AX press → no focus change
+  interceptor macos act <ref> "<text>"       Type via AX value-set → no focus change
+  interceptor macos inspect [--app <name>]   Tree + apps snapshot + frontmost info
+  interceptor macos inspect <ref>            Full attributes for a ref
+
+  Accessibility (AX):
+  interceptor macos tree [--app <name>]      AX tree for app (or frontmost)
+  interceptor macos tree --filter interactive|all   Filter (default interactive)
+  interceptor macos tree --depth N --max-chars N    Limit depth and output size
+  interceptor macos find "<query>" [--role button] [--app <name>]
+  interceptor macos value <ref> ["<text>"]   Read or set element value
+  interceptor macos action <ref> press|increment|decrement|...
+  interceptor macos focused [--app <name>]   Currently focused element
+  interceptor macos windows [--app <name>]   All windows with frames
+  interceptor macos move <ref> --x N --y N
+  interceptor macos resize <ref> --width N --height N
+
+  Input (AX-first, PID-routed CGEvent fallback):
+    Refs route through AX. --app/--pid route via CGEvent.postToPid (no focus change).
+    Bare coordinates fall back to system HID tap (legacy: follows frontmost).
+  interceptor macos click <ref>              AX press
+  interceptor macos click X,Y --app <name>   Coordinate click via postToPid
+  interceptor macos click X,Y                Coordinate click via system HID (legacy)
+  interceptor macos click <ref> --double|--right
+  interceptor macos type <ref> "<text>"      AX value-set on text-bearing role
+  interceptor macos type "<text>" --app <name>   Type via postToPid keys
+  interceptor macos keys "Meta+A" [--app <name>|--pid N]
+  interceptor macos scroll up|down|left|right N [--app <name>] [--times N] [--interval-ms N]
+  interceptor macos drag <fromRef> <toRef> [--app <name>]
+  interceptor macos drag X1,Y1 X2,Y2 [--app <name>]
+
+  Apps & Windows:
+  interceptor macos apps                     List running apps with PIDs
+  interceptor macos app activate <name>      Foreground an app (explicit opt-in)
+  interceptor macos app hide|unhide|quit <name>
+  interceptor macos app launch <bundleId>    Launch by bundle id (background-first)
+  interceptor macos frontmost                Currently frontmost app
+
+  Menu Traversal:
+  interceptor macos menu [--app <name>]                   List menu bar
+  interceptor macos menu "Window" "Bring All to Front"    Invoke menu path
+
+  Capture (works on occluded / minimized / cross-Space windows):
+  interceptor macos screenshot [--app <name>] [--display N] [--save] [--format jpeg|png|webp]
+  interceptor macos screenshot --target-max-long-edge 1568   Resize at capture
+  interceptor macos screenshot --mode display              Full-screen
+  interceptor macos screenshot --save                      Result payload key is "filePath" (not "path")
+  interceptor macos capture start [--app <name>]
+  interceptor macos capture frame [--timeout-ms 3000]      Block briefly for first frame; default 3000ms
+  interceptor macos capture stop
+
+  Apple Events (cross-app routing without raising):
+  interceptor macos intent dispatch --bundle <id> --script '<applescript>'
+  interceptor macos intent dispatch --bundle <id> --javascript '<jxa>'
+  interceptor macos intent warmup <bundleId>...
+
+  System & Filesystem:
+  interceptor macos clipboard read|write|tail
+  interceptor macos notifications tail [--app <name>] [--limit N]
+  interceptor macos notifications log [--app <pat>] [--limit N]   Buffered distributed notifications
+  interceptor macos files recent [--filter <pat>] [--limit N]
+  interceptor macos files watch <path> [--filter <pat>]            Emit file_change events for path
+  interceptor macos files open                                     lsof-derived list of open files under $HOME
+  interceptor macos fs read|write|search <path|query>
+  interceptor macos url get|post <url> [--header "K: V"] [--body <data>]
+  interceptor macos log query --predicate '...' [--since <ts>] [--limit N]
+
+  Audio / Speech / Vision / NLP / AI:
+  interceptor macos listen status|start|stop [--device <name>]
+  interceptor macos vad status|start|stop
+  interceptor macos sounds status|start|stop [--filter <pat>]
+  interceptor macos audio output|input start|stop [--app <name>] [--save]
+  interceptor macos vision text|faces|hands|bodies [--app <name>]
+  interceptor macos nlp entities|language|sentiment|tokens "<text>"
+  interceptor macos nlp similar "<word1>" "<word2>"
+  interceptor macos ai status|prompt "<prompt>"
+
+  Recording & Replay:
+  interceptor macos monitor start [--instruction "<intent>"]
+  interceptor macos monitor stop|tail|list|status
+  interceptor macos monitor export <sid> [--plan|--json] [--limit N]
+
+  Display / Stream / Container / Overlays:
+  interceptor macos display list|set <resolution> [--id N] [--hidpi] [--hz N]
+  interceptor macos stream start|status|stop [--sid N] [--app <name>] [--virtual <res>]
+  interceptor macos container run <image> [--cmd "..."] [--env K=V] [--volume host:container[:mode]]
+  interceptor macos overlay start|stop|list|status|eval|ctl|verbs
+
+  Trust & Permissions (status vocabulary: granted | denied | not_determined | restricted):
+  interceptor macos trust                    Permission snapshot. Top-level fields
+                                             accessibility / screenRecording / microphone
+                                             are status strings; permissions[] carries the
+                                             same status plus 'limitation' on AX / Screen.
+  interceptor macos trust --no-prompt        Force read-only — overrides every prompt flag.
+  interceptor macos trust --prompt           Fire all three TCC prompts (non-blocking — Mic
+                                             returns 'not_determined' + pending_user_action
+                                             until user answers; re-poll trust to observe).
+  interceptor macos trust --walkthrough      Prompt all three + open the next missing pane.
+  interceptor macos trust --accessibility-prompt   Prompt only Accessibility (returns Bool only;
+                                                   not_determined unobservable per Apple API).
+  interceptor macos trust --screen-prompt    Prompt only Screen Recording (same Apple constraint).
+  interceptor macos trust --microphone-prompt   Prompt only Microphone (only surface where Apple
+                                                exposes notDetermined / restricted).`

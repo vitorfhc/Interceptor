@@ -2,6 +2,11 @@ import Foundation
 import AppKit
 
 final class AppsDomain: DomainHandler, @unchecked Sendable {
+    private struct FrontmostInfo {
+        let app: NSRunningApplication
+        let payload: [String: Any]
+    }
+
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         switch command {
         case "apps":
@@ -32,17 +37,11 @@ final class AppsDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func frontmost(completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let app = NSWorkspace.shared.frontmostApplication else {
+        guard let info = frontmostInfo() else {
             completion(WireFormat.error("no frontmost application"))
             return
         }
-        let info: [String: Any] = [
-            "name": app.localizedName ?? "(unknown)",
-            "pid": app.processIdentifier,
-            "bundleId": app.bundleIdentifier ?? "",
-            "isActive": app.isActive
-        ]
-        completion(WireFormat.success(info))
+        completion(WireFormat.success(info.payload))
     }
 
     private func handleApp(_ subcommand: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
@@ -54,8 +53,15 @@ final class AppsDomain: DomainHandler, @unchecked Sendable {
                 completion(WireFormat.error("app not found"))
                 return
             }
-            app.activate()
-            completion(WireFormat.success("activated \(app.localizedName ?? "app")"))
+            app.unhide()
+            let requested = app.activate(options: [.activateIgnoringOtherApps])
+            if waitForActivation(of: app) {
+                completion(WireFormat.success("activated \(app.localizedName ?? "app")"))
+            } else if requested {
+                completion(WireFormat.error("activation requested but app did not become frontmost"))
+            } else {
+                completion(WireFormat.error("activation request failed"))
+            }
         case "hide":
             let name = action["app"] as? String
             let pid = action["pid"] as? Int32
@@ -115,5 +121,37 @@ final class AppsDomain: DomainHandler, @unchecked Sendable {
             }
         }
         return NSWorkspace.shared.frontmostApplication
+    }
+
+    private func frontmostInfo() -> FrontmostInfo? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        return FrontmostInfo(
+            app: app,
+            payload: [
+                "name": app.localizedName ?? "(unknown)",
+                "pid": app.processIdentifier,
+                "bundleId": app.bundleIdentifier ?? "",
+                "isActive": app.isActive
+            ]
+        )
+    }
+
+    private func waitForActivation(of app: NSRunningApplication, timeoutMs: Int = 1000) -> Bool {
+        let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
+        while Date() < deadline {
+            if Self.activationReachedTarget(
+                targetPID: app.processIdentifier,
+                appIsActive: app.isActive,
+                frontmostPID: frontmostInfo()?.app.processIdentifier
+            ) {
+                return true
+            }
+            usleep(50_000)
+        }
+        return false
+    }
+
+    static func activationReachedTarget(targetPID: pid_t, appIsActive: Bool, frontmostPID: pid_t?) -> Bool {
+        appIsActive && frontmostPID == targetPID
     }
 }

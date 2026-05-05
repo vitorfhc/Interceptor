@@ -7,6 +7,8 @@ import CoreMedia
 final class AudioDomain: DomainHandler, @unchecked Sendable {
     private var outputStream: SCStream?
     private var inputEngine: AVAudioEngine?
+    private var inputAudioFile: AVAudioFile?
+    private var inputSavePath: String?
     private let sessionsQueue = DispatchQueue(label: "interceptor.audio.sessions")
 
     nonisolated(unsafe) private static var sharedAudioBuffer: AVAudioPCMBuffer?
@@ -146,18 +148,58 @@ final class AudioDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func startInputCapture(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let save = action["save"] as? Bool ?? false
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { _, _ in
-            // Audio buffer available for processing
+        // When --save is passed, write the tapped buffers to a CAF file in
+        // /tmp using AVAudioFile (Apple-native PCM container). CAF is the
+        // path of least resistance — no encoder, no header surgery, just
+        // raw PCM in the same format the inputNode produces.
+        var fileWriter: AVAudioFile? = nil
+        var savedPath: String? = nil
+        if save {
+            let timestamp = Int(Date().timeIntervalSince1970)
+            let path = "/tmp/interceptor-audio-input-\(timestamp).caf"
+            let url = URL(fileURLWithPath: path)
+            do {
+                fileWriter = try AVAudioFile(forWriting: url, settings: format.settings)
+                savedPath = path
+            } catch {
+                completion(WireFormat.error("input capture file open failed: \(error.localizedDescription)"))
+                return
+            }
+        }
+
+        // Hold writer reference under sessionsQueue so the tap closure can
+        // append without a data race against stop().
+        sessionsQueue.sync {
+            self.inputAudioFile = fileWriter
+            self.inputSavePath = savedPath
+        }
+
+        let writerRef = fileWriter
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            guard let self = self else { return }
+            guard let writer = writerRef else { return }
+            // AVAudioFile is not declared Sendable but is documented safe
+            // for serial single-writer access. The tap callback fires on a
+            // single audio queue, so concurrent writes can't happen.
+            try? writer.write(from: buffer)
+            _ = self  // silence unused-self warning under -strict-concurrency
         }
 
         do {
             try engine.start()
             self.inputEngine = engine
-            completion(WireFormat.success("audio input capture started (\(Int(format.sampleRate))Hz)"))
+            var payload: [String: Any] = [
+                "message": "audio input capture started (\(Int(format.sampleRate))Hz)",
+                "sampleRate": Int(format.sampleRate),
+                "channels": Int(format.channelCount)
+            ]
+            if let path = savedPath { payload["filePath"] = path }
+            completion(WireFormat.success(payload))
         } catch {
             completion(WireFormat.error("input capture failed: \(error.localizedDescription)"))
         }
@@ -168,7 +210,18 @@ final class AudioDomain: DomainHandler, @unchecked Sendable {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
             self.inputEngine = nil
-            completion(WireFormat.success("audio input capture stopped"))
+            // Closing the AVAudioFile writes the final CAF header so the
+            // file is playable. Apple does this automatically on dealloc,
+            // but we drop the reference deterministically here.
+            var savedPath: String? = nil
+            sessionsQueue.sync {
+                self.inputAudioFile = nil
+                savedPath = self.inputSavePath
+                self.inputSavePath = nil
+            }
+            var payload: [String: Any] = ["message": "audio input capture stopped"]
+            if let path = savedPath { payload["filePath"] = path }
+            completion(WireFormat.success(payload))
         } else {
             completion(WireFormat.success("no active input capture"))
         }

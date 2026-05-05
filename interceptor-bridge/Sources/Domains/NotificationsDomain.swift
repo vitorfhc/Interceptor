@@ -6,13 +6,17 @@ final class NotificationsDomain: DomainHandler, @unchecked Sendable {
     private var observing = false
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        switch command {
+        // Router sends command = "notifications" because the action type
+        // is two-segment (`macos_notifications`). The CLI parser puts the
+        // real sub-verb on action["sub"].
+        let sub = action["sub"] as? String ?? command
+        switch sub {
         case "tail":
             startTailing(completion: completion)
         case "log":
             getLog(action, completion: completion)
         default:
-            notImplemented(command, completion: completion)
+            notImplemented(sub, completion: completion)
         }
     }
 

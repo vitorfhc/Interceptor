@@ -16,13 +16,17 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
         }
     }
 
-    private func frontmostPid(_ action: [String: Any]) -> pid_t {
+    private func targetPid(_ action: [String: Any]) -> pid_t {
         if let pid = action["pid"] as? Int32 { return pid }
+        if let appName = action["app"] as? String,
+           let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == appName }) {
+            return app.processIdentifier
+        }
         return NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
     }
 
     private func listMenu(action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let pid = frontmostPid(action)
+        let pid = targetPid(action)
         guard pid != 0 else {
             completion(WireFormat.error("no frontmost app"))
             return
@@ -74,7 +78,7 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func invokeMenu(items: [String], action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let pid = frontmostPid(action)
+        let pid = targetPid(action)
         guard pid != 0 else {
             completion(WireFormat.error("no frontmost app"))
             return

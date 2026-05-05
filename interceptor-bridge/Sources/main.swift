@@ -133,15 +133,60 @@ signal(SIGTERM) { _ in
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory) // No dock icon, no menu bar
 
+// Install an NSApplicationDelegate so AppKit's default Apple-Event
+// handling routes Sparkle's `kAEQuitApplication` (sent at stage 2 of an
+// install) through `applicationShouldTerminate`. Without this, the install
+// flow hangs because the bridge never exits to let Sparkle replace the
+// bundle. See AppDelegate.swift for the full rationale.
+let bridgeAppDelegate = BridgeAppDelegate()
+app.delegate = bridgeAppDelegate
+
 // Sparkle auto-update. SUFeedURL + SUPublicEDKey + scheduled-check settings
 // live in the bundled Info.plist (see scripts/build-bridge.sh). Holding a
 // strong reference here for the lifetime of the process; Sparkle handles its
 // own polling, prompts, and the hand-off to the macOS installer for the .pkg.
+//
+// `sparkleUserDriverDelegate` adopts SPUStandardUserDriverDelegate to
+// surface update alerts in front of other apps. Without it, our LSUIElement
+// bridge silently shows alerts in the background and the user never sees
+// them (Sparkle itself logs an Error-level warning to confirm). See
+// SparkleUserDriverDelegate.swift for the full rationale and the gentle-
+// reminders contract. Held strongly here so it lives the lifetime of the
+// process — Sparkle weakly references its delegate.
+let sparkleUpdaterDelegate = SparkleUpdaterDelegate()
+let sparkleUserDriverDelegate = SparkleUserDriverDelegate()
 let updaterController = SPUStandardUpdaterController(
     startingUpdater: true,
-    updaterDelegate: nil,
-    userDriverDelegate: nil
+    updaterDelegate: sparkleUpdaterDelegate,
+    userDriverDelegate: sparkleUserDriverDelegate
 )
+
+// `interceptor macos update *` thin wrapper around SPUUpdater so the CLI
+// can drive a user-initiated update check directly. Useful both for agents
+// and for verifying the activation-policy dialog path (since automatic
+// checks for LSUIElement apps may silently download rather than surface).
+let updateDomain = UpdateDomain(updaterController: updaterController)
+router.register("update", handler: updateDomain)
 Platform.log("sparkle updater started; feed: \(updaterController.updater.feedURL?.absoluteString ?? "unset")")
 
-RunLoop.main.run()
+// Switched from `RunLoop.main.run()` to `app.run()`.
+// `RunLoop.main.run()` only spins the underlying CFRunLoop and does NOT
+// invoke NSApplication's Cocoa event loop. That was fine for the bridge
+// when no AppKit windows were ever shown (LSUIElement headless daemon
+// mode). The moment Sparkle's `SPUStandardUserDriver` puts up its modal
+// "A new version of Interceptor is available!" alert window, that window
+// needs the full NSApp event pump to receive mouse/keyboard events; under
+// `RunLoop.main.run()` the window appears but the main thread doesn't
+// process its UI events, so macOS marks the bridge "Not Responding" and
+// the user can't click any of the alert's buttons.
+//
+// `NSApp.run()` invokes `finishLaunching` and starts the standard Cocoa
+// event loop. It only returns when the app terminates. With our
+// `BridgeAppDelegate.applicationShouldTerminateAfterLastWindowClosed`
+// returning `false`, the bridge stays alive after the Sparkle alert is
+// dismissed; with `applicationShouldTerminate` running cleanup and
+// returning `.terminateNow`, Sparkle's stage-2 quit event lets the install
+// proceed cleanly. This also means our SIGINT/SIGTERM signal handlers
+// above continue to work — they call `Platform.cleanup()` + `exit(0)`
+// before NSApp.run() ever sees them.
+app.run()

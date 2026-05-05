@@ -9,9 +9,11 @@ enum InputError: Error {
 
 final class InputDomain: DomainHandler, @unchecked Sendable {
     private let refRegistry: RefRegistry
+    private let selector: InputTargetSelector
 
     init(refRegistry: RefRegistry = .shared) {
         self.refRegistry = refRegistry
+        self.selector = InputTargetSelector.live(refRegistry: refRegistry)
     }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
@@ -31,6 +33,44 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         }
     }
 
+    // MARK: - Routing helpers
+
+    // Reads (ref?, app?, pid?) out of the action and asks the selector
+    // for a delivery target. Used by every input verb so behavior is
+    // uniform: ref present → AX press; explicit app/pid → postToPid;
+    // nothing → legacy cghidEventTap.
+    private func selectTarget(_ action: [String: Any]) -> InputTarget {
+        let ref = action["ref"] as? String
+        let appName = action["app"] as? String
+        let pid: pid_t? = (action["pid"] as? Int).map { pid_t($0) } ?? (action["pid"] as? pid_t)
+        return selector.select(ref: ref, appName: appName, pid: pid)
+    }
+
+    // Same shape but returns just a PID for keyboard fallback paths
+    // (type / keys) where AX press was inappropriate or unavailable.
+    private func targetPid(_ action: [String: Any]) -> pid_t? {
+        let ref = action["ref"] as? String
+        let appName = action["app"] as? String
+        let pid: pid_t? = (action["pid"] as? Int).map { pid_t($0) } ?? (action["pid"] as? pid_t)
+        return selector.resolveTargetPid(ref: ref, appName: appName, pid: pid)
+    }
+
+    // Posts a single CGEvent through the right layer for the resolved
+    // target. Centralizes the post-tap vs post-to-pid choice so every
+    // verb can stay short and consistent.
+    private func post(_ event: CGEvent, on target: InputTarget) {
+        switch target {
+        case .axPress:
+            // AX press doesn't post events; callers handle that path
+            // explicitly. Falling through here would be a bug.
+            break
+        case .postToPid(let pid):
+            event.postToPid(pid)
+        case .cghidEventTap:
+            event.post(tap: .cghidEventTap)
+        }
+    }
+
     // MARK: - Click
 
     private func handleClick(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
@@ -38,7 +78,36 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         let right = action["right"] as? Bool ?? false
         let clickCount = double ? 2 : 1
 
-        resolveCoordinates(action) { result in
+        let target = selectTarget(action)
+
+        // Pure AX press — only for plain single left clicks against a ref.
+        // AX press doesn't model double-click or right-click semantics;
+        // those keep going through synthesized CGEvents.
+        if case .axPress(let element) = target, !double, !right {
+            let err = AXUIElementPerformAction(element, kAXPressAction as CFString)
+            if err == .success {
+                completion(WireFormat.success("ax-pressed ref"))
+                return
+            }
+            // Fall through: AX rejected the action; synthesize the click
+            // and route it via PID so it still doesn't change focus.
+        }
+
+        // For AX-resolved targets, find the owning PID up front so we
+        // can postToPid the synthesized events without taking focus.
+        // For coords-only with no app, this falls back to cghidEventTap
+        // (legacy behavior). Resolved here (outside the closure) so the
+        // non-Sendable `action` dictionary doesn't have to be captured.
+        let resolvedPostTarget: InputTarget
+        switch target {
+        case .axPress:
+            if let pid = targetPid(action) { resolvedPostTarget = .postToPid(pid) }
+            else { resolvedPostTarget = .cghidEventTap }
+        default:
+            resolvedPostTarget = target
+        }
+
+        resolveCoordinates(action) { [self] result in
             switch result {
             case .success(let point):
                 let button: CGMouseButton = right ? .right : .left
@@ -50,25 +119,32 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
                     return
                 }
 
-                // Move first
+                let postTarget = resolvedPostTarget
+
                 if let moveEvent = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) {
-                    moveEvent.post(tap: .cghidEventTap)
+                    post(moveEvent, on: postTarget)
                 }
 
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.01) {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.01) { [self] in
                     for click in 1...clickCount {
                         if let downEvent = CGEvent(mouseEventSource: source, mouseType: downType, mouseCursorPosition: point, mouseButton: button) {
                             downEvent.setIntegerValueField(.mouseEventClickState, value: Int64(click))
-                            downEvent.post(tap: .cghidEventTap)
+                            post(downEvent, on: postTarget)
                         }
                         usleep(5000)
                         if let upEvent = CGEvent(mouseEventSource: source, mouseType: upType, mouseCursorPosition: point, mouseButton: button) {
                             upEvent.setIntegerValueField(.mouseEventClickState, value: Int64(click))
-                            upEvent.post(tap: .cghidEventTap)
+                            post(upEvent, on: postTarget)
                         }
                         if click < clickCount { usleep(50000) }
                     }
-                    completion(WireFormat.success("clicked at (\(Int(point.x)), \(Int(point.y)))"))
+                    let routing: String
+                    switch postTarget {
+                    case .postToPid(let pid): routing = "pid=\(pid)"
+                    case .cghidEventTap: routing = "frontmost"
+                    case .axPress: routing = "ax"
+                    }
+                    completion(WireFormat.success("clicked at (\(Int(point.x)), \(Int(point.y))) → \(routing)"))
                 }
             case .failure(let error):
                 switch error {
@@ -86,12 +162,27 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             return
         }
 
-        // If ref provided, focus first
-        if let ref = action["ref"] as? String {
-            if let element = refRegistry.resolve(ref) {
-                AXUIElementPerformAction(element, kAXPressAction as CFString)
-                usleep(100_000)
+        // AX-first path: when a ref points to a text-bearing element,
+        // try AXUIElementSetAttributeValue(kAXValueAttribute, text).
+        // This bypasses the keyboard entirely and never moves focus.
+        // Apple documents this as the supported way to programmatically
+        // populate text fields.
+        if let ref = action["ref"] as? String, let element = refRegistry.resolve(ref) {
+            if Self.isTextRole(element) {
+                let err = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
+                if err == .success {
+                    completion(WireFormat.success("ax-set value (\(text.count) chars)"))
+                    return
+                }
+                // Element rejected programmatic value-set (e.g. password
+                // fields, fields with custom delegates). Fall through
+                // to synthesized key events, but still route to the
+                // ref's owning PID so we don't have to foreground.
             }
+            // Focus the element first so synthesized keys land in it,
+            // even though the app stays in the background.
+            AXUIElementPerformAction(element, kAXPressAction as CFString)
+            usleep(100_000)
         }
 
         guard let source = CGEventSource(stateID: .combinedSessionState) else {
@@ -99,21 +190,54 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             return
         }
 
-        DispatchQueue.global().async {
+        // Pick a delivery target for synthesized key events: prefer
+        // postToPid (ref → owning PID, or explicit pid/app), else fall
+        // through to cghidEventTap.
+        let postTarget: InputTarget
+        if let pid = targetPid(action) {
+            postTarget = .postToPid(pid)
+        } else {
+            postTarget = .cghidEventTap
+        }
+
+        DispatchQueue.global().async { [self] in
             for char in text {
                 let utf16 = Array(String(char).utf16)
                 if let downEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) {
                     downEvent.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-                    downEvent.post(tap: .cghidEventTap)
+                    post(downEvent, on: postTarget)
                 }
                 usleep(3000)
                 if let upEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) {
                     upEvent.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-                    upEvent.post(tap: .cghidEventTap)
+                    post(upEvent, on: postTarget)
                 }
                 usleep(8000)
             }
-            completion(WireFormat.success("typed \(text.count) characters"))
+            let routing: String
+            switch postTarget {
+            case .postToPid(let pid): routing = "pid=\(pid)"
+            case .cghidEventTap: routing = "frontmost"
+            case .axPress: routing = "ax"
+            }
+            completion(WireFormat.success("typed \(text.count) characters → \(routing)"))
+        }
+    }
+
+    // Roles that we accept programmatic value-set on. These are the
+    // standard text-bearing AX roles per Apple's accessibility
+    // documentation.
+    private static func isTextRole(_ element: AXUIElement) -> Bool {
+        var role: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) == .success,
+              let r = role as? String else {
+            return false
+        }
+        switch r {
+        case "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox":
+            return true
+        default:
+            return false
         }
     }
 
@@ -164,7 +288,16 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             return
         }
 
-        DispatchQueue.global().async {
+        // Same routing rule as click/type: ref → owning PID, else
+        // explicit pid/app, else cghidEventTap.
+        let postTarget: InputTarget
+        if let pid = targetPid(action) {
+            postTarget = .postToPid(pid)
+        } else {
+            postTarget = .cghidEventTap
+        }
+
+        DispatchQueue.global().async { [self] in
             // Press modifiers
             let modKeyCodes: [(String, CGKeyCode)] = [
                 ("shift", 56), ("control", 59), ("ctrl", 59), ("alt", 58), ("option", 58),
@@ -174,7 +307,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
                 if let (_, code) = modKeyCodes.first(where: { $0.0 == mod }) {
                     if let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true) {
                         event.flags = flags
-                        event.post(tap: .cghidEventTap)
+                        post(event, on: postTarget)
                     }
                 }
             }
@@ -182,24 +315,30 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
 
             if let downEvent = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) {
                 downEvent.flags = flags
-                downEvent.post(tap: .cghidEventTap)
+                post(downEvent, on: postTarget)
             }
             usleep(5000)
             if let upEvent = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) {
                 upEvent.flags = flags
-                upEvent.post(tap: .cghidEventTap)
+                post(upEvent, on: postTarget)
             }
 
             usleep(5000)
             for mod in modifiers.reversed() {
                 if let (_, code) = modKeyCodes.first(where: { $0.0 == mod }) {
                     if let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) {
-                        event.post(tap: .cghidEventTap)
+                        post(event, on: postTarget)
                     }
                 }
             }
 
-            completion(WireFormat.success("sent keys: \(keys)"))
+            let routing: String
+            switch postTarget {
+            case .postToPid(let pid): routing = "pid=\(pid)"
+            case .cghidEventTap: routing = "frontmost"
+            case .axPress: routing = "ax"
+            }
+            completion(WireFormat.success("sent keys: \(keys) → \(routing)"))
         }
     }
 
@@ -210,20 +349,9 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         let amount = action["amount"] as? Int32 ?? 300
         let times = max(1, action["times"] as? Int ?? 1)
         let intervalMs = max(0, action["intervalMs"] as? Int ?? 50)
-        // --pid <pid> or --app <appName> routes the scroll wheel event
-        // directly to that process via CGEvent.postToPid, bypassing the
-        // focused-window routing of cghidEventTap. This lets us scroll an
-        // occluded window (e.g. Signal in the background) without bringing
-        // it to front. Same trick DockDoor / AltTab use.
-        let targetPid: pid_t?
-        if let p = action["pid"] as? Int {
-            targetPid = pid_t(p)
-        } else if let appName = action["app"] as? String {
-            let workspace = NSWorkspace.shared
-            targetPid = workspace.runningApplications.first(where: { $0.localizedName == appName })?.processIdentifier
-        } else {
-            targetPid = nil
-        }
+        // Prefer ref-resolved owning PID, then explicit --pid, then
+        // --app name lookup. Same precedence as click/type/keys.
+        let pidFromAction = targetPid(action)
 
         guard let source = CGEventSource(stateID: .combinedSessionState) else {
             completion(WireFormat.error("failed to create event source"))
@@ -244,7 +372,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         // loop first via the SLPS make-key trick so Chromium / Electron
         // actually processes the scroll. The window stays where it is in
         // z-order; the user's focused app is preserved.
-        if let pid = targetPid {
+        if let pid = pidFromAction {
             // Find a window for this pid via CGWindowList so we have a CGWindowID.
             if let arr = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
                 let mine = arr.first(where: { ($0[kCGWindowOwnerPID as String] as? pid_t) == pid })
@@ -258,7 +386,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
 
         for i in 0..<times {
             if let scrollEvent = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0) {
-                if let pid = targetPid {
+                if let pid = pidFromAction {
                     scrollEvent.postToPid(pid)
                 } else {
                     scrollEvent.post(tap: .cghidEventTap)
@@ -268,20 +396,27 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
                 usleep(useconds_t(intervalMs * 1000))
             }
         }
-        let routing = targetPid.map { "pid=\($0)" } ?? "focused"
+        let routing = pidFromAction.map { "pid=\($0)" } ?? "frontmost"
         completion(WireFormat.success("scrolled \(direction) \(amount)x\(times) → \(routing)"))
     }
 
     // MARK: - Drag
 
     private func handleDrag(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let postTarget: InputTarget
+        if let pid = targetPid(action) {
+            postTarget = .postToPid(pid)
+        } else {
+            postTarget = .cghidEventTap
+        }
+
         guard let fromRef = action["from"] as? String, let toRef = action["to"] as? String else {
             // Try coordinate-based drag
             if let fromCoords = action["fromCoords"] as? String, let toCoords = action["toCoords"] as? String {
                 let fromParts = fromCoords.split(separator: ",").compactMap { Double($0) }
                 let toParts = toCoords.split(separator: ",").compactMap { Double($0) }
                 if fromParts.count == 2 && toParts.count == 2 {
-                    performDrag(from: CGPoint(x: fromParts[0], y: fromParts[1]), to: CGPoint(x: toParts[0], y: toParts[1]), completion: completion)
+                    performDrag(from: CGPoint(x: fromParts[0], y: fromParts[1]), to: CGPoint(x: toParts[0], y: toParts[1]), target: postTarget, completion: completion)
                     return
                 }
             }
@@ -301,25 +436,36 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             return
         }
 
-        performDrag(from: fromPoint, to: toPoint, completion: completion)
+        // Refs were given but no app/pid was; pick up the owning PID
+        // from the ref so the drag still routes correctly.
+        let dragTarget: InputTarget
+        switch postTarget {
+        case .cghidEventTap:
+            if let pid = refRegistry.resolvePID(fromRef) { dragTarget = .postToPid(pid) }
+            else { dragTarget = .cghidEventTap }
+        default:
+            dragTarget = postTarget
+        }
+
+        performDrag(from: fromPoint, to: toPoint, target: dragTarget, completion: completion)
     }
 
-    private func performDrag(from: CGPoint, to: CGPoint, completion: @escaping @Sendable ([String: Any]) -> Void) {
+    private func performDrag(from: CGPoint, to: CGPoint, target: InputTarget, completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let source = CGEventSource(stateID: .combinedSessionState) else {
             completion(WireFormat.error("failed to create event source"))
             return
         }
 
-        DispatchQueue.global().async {
+        DispatchQueue.global().async { [self] in
             // Move to start
             if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: from, mouseButton: .left) {
-                move.post(tap: .cghidEventTap)
+                post(move, on: target)
             }
             usleep(10000)
 
             // Mouse down
             if let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: from, mouseButton: .left) {
-                down.post(tap: .cghidEventTap)
+                post(down, on: target)
             }
             usleep(10000)
 
@@ -330,16 +476,22 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
                 let x = from.x + (to.x - from.x) * t
                 let y = from.y + (to.y - from.y) * t
                 if let drag = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) {
-                    drag.post(tap: .cghidEventTap)
+                    post(drag, on: target)
                 }
                 usleep(5000)
             }
 
             // Mouse up
             if let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: to, mouseButton: .left) {
-                up.post(tap: .cghidEventTap)
+                post(up, on: target)
             }
-            completion(WireFormat.success("dragged from (\(Int(from.x)),\(Int(from.y))) to (\(Int(to.x)),\(Int(to.y)))"))
+            let routing: String
+            switch target {
+            case .postToPid(let pid): routing = "pid=\(pid)"
+            case .cghidEventTap: routing = "frontmost"
+            case .axPress: routing = "ax"
+            }
+            completion(WireFormat.success("dragged from (\(Int(from.x)),\(Int(from.y))) to (\(Int(to.x)),\(Int(to.y))) → \(routing)"))
         }
     }
 

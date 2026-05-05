@@ -132,8 +132,13 @@ export function parseMacosCommand(filtered: string[]): Action | null {
 
     case "inspect": {
       const ref = filtered[2]
-      if (!ref) { console.error("error: interceptor macos inspect requires a ref (e.g. e5)"); process.exit(1) }
-      return { type: "macos_inspect", ref }
+      if (ref && !ref.startsWith("--")) return { type: "macos_inspect", ref }
+      return {
+        type: "macos_compound",
+        sub: "inspect",
+        app: flagVal(filtered, "--app"),
+        pid: flagInt(filtered, "--pid"),
+      }
     }
 
     case "value": {
@@ -166,7 +171,7 @@ export function parseMacosCommand(filtered: string[]): Action | null {
 
     // ── Menu ──
     case "menu": {
-      const items = filtered.slice(2).filter(a => !a.startsWith("--"))
+      const items = collectPositionals(filtered, 2, new Set(["--app", "--pid"]))
       return {
         type: "macos_menu",
         ...(items.length > 0 && { items }),
@@ -175,16 +180,31 @@ export function parseMacosCommand(filtered: string[]): Action | null {
       }
     }
 
+    // ── Update (Sparkle) ──
+    case "update": {
+      const op = filtered[2] || "status"
+      return {
+        type: "macos_update",
+        sub: op,
+      }
+    }
+
     // ── Trust ──
-    case "trust":
+    case "trust": {
+      // --no-prompt is defense-in-depth for read-only consumers: when set,
+      // every prompt-triggering flag is forced false in the wire payload so
+      // a future caller-side bug cannot accidentally modify TCC state.
+      const noPrompt = filtered.includes("--no-prompt")
       return {
         type: "macos_trust",
-        prompt: filtered.includes("--prompt") || filtered.includes("--walkthrough"),
-        walkthrough: filtered.includes("--walkthrough"),
-        accessibilityPrompt: filtered.includes("--accessibility-prompt"),
-        screenPrompt: filtered.includes("--screen-prompt"),
-        microphonePrompt: filtered.includes("--microphone-prompt"),
+        noPrompt,
+        prompt: !noPrompt && (filtered.includes("--prompt") || filtered.includes("--walkthrough")),
+        walkthrough: !noPrompt && filtered.includes("--walkthrough"),
+        accessibilityPrompt: !noPrompt && filtered.includes("--accessibility-prompt"),
+        screenPrompt: !noPrompt && filtered.includes("--screen-prompt"),
+        microphonePrompt: !noPrompt && filtered.includes("--microphone-prompt"),
       }
+    }
 
     // ── Apps ──
     case "apps":
@@ -210,27 +230,44 @@ export function parseMacosCommand(filtered: string[]): Action | null {
       const target = filtered[2]
       if (!target) { console.error("error: interceptor macos click requires a ref or coordinates"); process.exit(1) }
       const isCoords = target.includes(",")
-      return {
+      const action: Action = {
         type: "macos_click",
         ...(isCoords ? { coords: target } : { ref: target }),
         double: filtered.includes("--double"),
         right: filtered.includes("--right"),
       }
+      // Optional --app / --pid flow through to the bridge so synthesized
+      // CGEvents post via CGEvent.postToPid instead of the system HID
+      // tap, keeping the click background-only.
+      const clickApp = flagVal(filtered, "--app")
+      const clickPid = flagInt(filtered, "--pid")
+      if (clickApp) action.app = clickApp
+      if (clickPid !== undefined) action.pid = clickPid
+      return action
     }
 
     case "type": {
       const refOrText = filtered[2]
       if (!refOrText) { console.error("error: interceptor macos type requires text or ref + text"); process.exit(1) }
-      if (/^e\d+$/.test(refOrText) && filtered[3]) {
-        return { type: "macos_type", ref: refOrText, text: filtered[3] }
-      }
-      return { type: "macos_type", text: refOrText }
+      const action: Action = /^e\d+$/.test(refOrText) && filtered[3]
+        ? { type: "macos_type", ref: refOrText, text: filtered[3] }
+        : { type: "macos_type", text: refOrText }
+      const typeApp = flagVal(filtered, "--app")
+      const typePid = flagInt(filtered, "--pid")
+      if (typeApp) action.app = typeApp
+      if (typePid !== undefined) action.pid = typePid
+      return action
     }
 
     case "keys": {
       const combo = filtered[2]
       if (!combo) { console.error("error: interceptor macos keys requires a key combo"); process.exit(1) }
-      return { type: "macos_keys", keys: combo }
+      const action: Action = { type: "macos_keys", keys: combo }
+      const keysApp = flagVal(filtered, "--app")
+      const keysPid = flagInt(filtered, "--pid")
+      if (keysApp) action.app = keysApp
+      if (keysPid !== undefined) action.pid = keysPid
+      return action
     }
 
     case "scroll": {
@@ -278,10 +315,14 @@ export function parseMacosCommand(filtered: string[]): Action | null {
       if (!from || !to) { console.error("error: interceptor macos drag requires from and to refs or coords"); process.exit(1) }
       const fromIsCoords = from.includes(",")
       const toIsCoords = to.includes(",")
-      if (fromIsCoords && toIsCoords) {
-        return { type: "macos_drag", fromCoords: from, toCoords: to }
-      }
-      return { type: "macos_drag", from, to }
+      const action: Action = fromIsCoords && toIsCoords
+        ? { type: "macos_drag", fromCoords: from, toCoords: to }
+        : { type: "macos_drag", from, to }
+      const dragApp = flagVal(filtered, "--app")
+      const dragPid = flagInt(filtered, "--pid")
+      if (dragApp) action.app = dragApp
+      if (dragPid !== undefined) action.pid = dragPid
+      return action
     }
 
     // ── Screenshot / Capture ──
@@ -317,11 +358,17 @@ export function parseMacosCommand(filtered: string[]): Action | null {
 
     case "capture": {
       const op = filtered[2] || "frame"
-      return {
+      const action: Action = {
         type: "macos_capture",
         sub: op,
         app: flagVal(filtered, "--app"),
       }
+      // `capture frame` blocks briefly waiting for the next sample buffer
+      // when the stream is active but hasn't ticked yet. Default 1000ms;
+      // override with --timeout-ms.
+      const timeoutMs = flagInt(filtered, "--timeout-ms")
+      if (timeoutMs !== undefined) action.timeoutMs = timeoutMs
+      return action
     }
 
     // ── Speech ──
@@ -498,6 +545,9 @@ export function parseMacosCommand(filtered: string[]): Action | null {
     // ── Compound Commands ──
     case "open": {
       const appName = filtered[2] || flagVal(filtered, "--app")
+      // Background-first by default; --activate is the
+      // explicit opt-in for "bring this app to the foreground."
+      const activate = filtered.includes("--activate")
       return {
         type: "macos_compound",
         sub: "open",
@@ -505,6 +555,7 @@ export function parseMacosCommand(filtered: string[]): Action | null {
         pid: flagInt(filtered, "--pid"),
         filter: flagVal(filtered, "--filter") || "interactive",
         depth: flagInt(filtered, "--depth") || 10,
+        activate,
       }
     }
 
@@ -528,15 +579,6 @@ export function parseMacosCommand(filtered: string[]): Action | null {
         sub: "act",
         ref: target,
         text,
-        app: flagVal(filtered, "--app"),
-        pid: flagInt(filtered, "--pid"),
-      }
-    }
-
-    case "inspect": {
-      return {
-        type: "macos_compound",
-        sub: "inspect",
         app: flagVal(filtered, "--app"),
         pid: flagInt(filtered, "--pid"),
       }
@@ -873,4 +915,18 @@ function flagInt(args: string[], flag: string): number | undefined {
   if (val === undefined) return undefined
   const n = parseInt(val)
   return isNaN(n) ? undefined : n
+}
+
+function collectPositionals(args: string[], startIndex: number, flagsWithValues = new Set<string>()): string[] {
+  const values: string[] = []
+  for (let i = startIndex; i < args.length; i++) {
+    const arg = args[i]
+    if (flagsWithValues.has(arg)) {
+      i += 1
+      continue
+    }
+    if (arg.startsWith("--")) continue
+    values.push(arg)
+  }
+  return values
 }
