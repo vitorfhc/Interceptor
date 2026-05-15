@@ -1,7 +1,7 @@
 {
   "agent": {
     "provider": "codex",
-    "model": "gpt-5.2",
+    "model": "gpt-5.4",
     "reasoningEffort": "high",
     "sandbox": "danger-full-access",
     "approvalPolicy": "never",
@@ -10,7 +10,7 @@
   },
   "judge": {
     "provider": "codex",
-    "model": "gpt-5.2",
+    "model": "gpt-5.4",
     "reasoningEffort": "high",
     "sandbox": "read-only",
     "approvalPolicy": "never",

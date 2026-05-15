@@ -20,6 +20,13 @@ export type StatusSnapshot = {
   bridgePid: number | null
   bridgeSocket: string | null
   launchAgentInstalled: boolean
+  // The plist path that's actually on disk (system-scoped preferred when both
+  // exist, since pkg installs land there). Null when neither file exists.
+  launchAgentPath: string | null
+  // True iff `launchctl print gui/<uid>/com.interceptor.bridge` succeeds —
+  // i.e. the plist isn't just on disk, it's actually bootstrapped into the
+  // user's GUI domain. Distinguishes "needs kickstart" from "needs bootstrap".
+  launchAgentLoaded: boolean
   // #52 browser-config block — populated only on macOS in verbose mode
   browser?: {
     configured: ("chrome" | "brave")[]   // browsers with NMH manifest installed
@@ -31,6 +38,30 @@ export type StatusSnapshot = {
     probed: boolean
     reachable: boolean
     reason?: string
+  }
+}
+
+const BRIDGE_LABEL = "com.interceptor.bridge"
+
+/**
+ * Run `launchctl print gui/<uid>/com.interceptor.bridge` and return true iff
+ * the service is actually bootstrapped into the user's GUI domain. A plist
+ * file sitting in ~/Library/LaunchAgents/ or /Library/LaunchAgents/ does NOT
+ * mean it's loaded — the pkg postinstall's `launchctl bootstrap` call can
+ * (and does) fail silently when the GUI session isn't reachable. This is the
+ * difference between "kickstart" being the right fix and "bootstrap" being
+ * the right fix.
+ */
+export function isLaunchAgentLoaded(uid: number): boolean {
+  if (process.platform !== "darwin") return false
+  try {
+    const result = spawnSync("launchctl", ["print", `gui/${uid}/${BRIDGE_LABEL}`], {
+      encoding: "utf-8",
+      stdio: ["ignore", "ignore", "ignore"],
+    })
+    return result.status === 0
+  } catch {
+    return false
   }
 }
 
@@ -56,7 +87,17 @@ export function readStatusSnapshot(): StatusSnapshot {
   const BRIDGE_SOCK_PATH = "/tmp/interceptor-bridge.sock"
   const LAUNCH_AGENT_PATH_USER = `${process.env.HOME || ""}/Library/LaunchAgents/com.interceptor.bridge.plist`
   const LAUNCH_AGENT_PATH_SYSTEM = "/Library/LaunchAgents/com.interceptor.bridge.plist"
-  const launchAgentInstalled = !IS_WIN && (existsSync(LAUNCH_AGENT_PATH_USER) || existsSync(LAUNCH_AGENT_PATH_SYSTEM))
+  const userPlistPresent = !IS_WIN && existsSync(LAUNCH_AGENT_PATH_USER)
+  const systemPlistPresent = !IS_WIN && existsSync(LAUNCH_AGENT_PATH_SYSTEM)
+  const launchAgentInstalled = userPlistPresent || systemPlistPresent
+  // Prefer the system plist when both exist — that's the pkg-install path,
+  // and it's the path the user's hint needs to reference for bootstrap.
+  const launchAgentPath = systemPlistPresent
+    ? LAUNCH_AGENT_PATH_SYSTEM
+    : (userPlistPresent ? LAUNCH_AGENT_PATH_USER : null)
+  const launchAgentLoaded = launchAgentInstalled && process.getuid
+    ? isLaunchAgentLoaded(process.getuid())
+    : false
   const bridgeSockExists = !IS_WIN && existsSync(BRIDGE_SOCK_PATH)
   let bridgePid: number | null = null
   let bridgeAlive = false
@@ -90,7 +131,48 @@ export function readStatusSnapshot(): StatusSnapshot {
     bridgePid,
     bridgeSocket: bridgeSockExists ? BRIDGE_SOCK_PATH : null,
     launchAgentInstalled,
+    launchAgentPath,
+    launchAgentLoaded,
   }
+}
+
+/**
+ * Pure function — compute the bridge-section hint lines from a snapshot.
+ * Extracted so it can be unit-tested without spawning launchctl. Called from
+ * formatStatus. Returns [] when the bridge is healthy and nothing needs to
+ * be said.
+ */
+export function computeBridgeHint(input: {
+  bridge: boolean
+  mode: StatusSnapshot["mode"]
+  launchAgentInstalled: boolean
+  launchAgentLoaded: boolean
+  launchAgentPath: string | null
+}): string[] {
+  if (input.bridge) return []
+  if (input.mode === "unknown") {
+    // Bridge alive but plist file missing — handled by the caller already
+    // (mode === "unknown" implies bridge is alive). Defensive default.
+    return [
+      "  note: bridge is alive but no LaunchAgent plist found at ~/Library/LaunchAgents/com.interceptor.bridge.plist or /Library/LaunchAgents/com.interceptor.bridge.plist.",
+      "        Run 'interceptor upgrade --full' to install the LaunchAgent for persistence.",
+    ]
+  }
+  if (input.launchAgentInstalled && !input.launchAgentLoaded) {
+    const path = input.launchAgentPath ?? "/Library/LaunchAgents/com.interceptor.bridge.plist"
+    return [
+      `  hint: LaunchAgent plist is on disk at ${path} but is NOT bootstrapped into your gui/$(id -u) domain — the pkg postinstall's bootstrap call likely failed (common when the installer ran without an aqua-session ancestor).`,
+      `        Fix: launchctl bootstrap gui/$(id -u) ${path}`,
+      "        Then: launchctl kickstart -k gui/$(id -u)/com.interceptor.bridge",
+      "        Or simpler: log out and back in — macOS auto-loads /Library/LaunchAgents/ at login.",
+    ]
+  }
+  if (input.launchAgentInstalled && input.launchAgentLoaded) {
+    return ["  hint: LaunchAgent is loaded but bridge is not running. Try: launchctl kickstart -k gui/$(id -u)/com.interceptor.bridge"]
+  }
+  // launchAgentInstalled === false, mode === "full" — shouldn't be reachable
+  // (mode === "full" implies launchAgentInstalled), but kept for completeness.
+  return []
 }
 
 /**
@@ -180,11 +262,14 @@ export function formatStatus(snap: StatusSnapshot, opts: { verbose?: boolean }):
     }
     if (snap.bridgePid) lines.push(`  pid: ${snap.bridgePid}`)
     lines.push(`  socket: ${snap.bridgeSocket ?? "not found"}`)
-    if (snap.mode === "unknown") {
-      lines.push("  note: bridge is alive but no LaunchAgent plist found at ~/Library/LaunchAgents/com.interceptor.bridge.plist or /Library/LaunchAgents/com.interceptor.bridge.plist.")
-      lines.push("        Run 'interceptor upgrade --full' to install the LaunchAgent for persistence.")
-    } else if (!snap.bridge) {
-      lines.push("  hint: LaunchAgent installed but bridge is not running. Try: launchctl kickstart -k gui/$(id -u)/com.interceptor.bridge")
+    for (const line of computeBridgeHint({
+      bridge: snap.bridge,
+      mode: snap.mode,
+      launchAgentInstalled: snap.launchAgentInstalled,
+      launchAgentLoaded: snap.launchAgentLoaded,
+      launchAgentPath: snap.launchAgentPath,
+    })) {
+      lines.push(line)
     }
   } else if (!IS_WIN) {
     lines.push("")
@@ -245,6 +330,8 @@ export function snapshotToJson(snap: StatusSnapshot): Record<string, unknown> {
     bridgePid: snap.bridgePid,
     bridgeSocket: snap.bridgeSocket,
     launchAgentInstalled: snap.launchAgentInstalled,
+    launchAgentPath: snap.launchAgentPath,
+    launchAgentLoaded: snap.launchAgentLoaded,
   }
   if (snap.browser) base.browser = snap.browser
   if (snap.extension) base.extension = snap.extension

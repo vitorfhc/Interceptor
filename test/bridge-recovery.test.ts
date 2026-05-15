@@ -77,6 +77,39 @@ describe("bridge recovery layout", () => {
     expect(formatBridgeUnavailableError(layout)).toContain("interceptor status")
   })
 
+  test("pkg full install with plist NOT bootstrapped tells the user to bootstrap, not kickstart", () => {
+    const systemLaunchAgent = "/Library/LaunchAgents/com.interceptor.bridge.plist"
+    const applicationsBundle = "/Applications/interceptor-bridge.app"
+    const exists = existsFor([systemLaunchAgent, applicationsBundle])
+    const layout = getBridgeRecoveryLayout({
+      exists,
+      home,
+      importMetaUrl: daemonImportMetaUrl,
+      uid,
+    })
+
+    const error = formatBridgeUnavailableError(layout, { launchAgentLoaded: false })
+    expect(error).toContain("launchctl bootstrap")
+    expect(error).toContain(systemLaunchAgent)
+    expect(error).toContain("log out and back in")
+  })
+
+  test("pkg full install with plist already bootstrapped falls back to kickstart guidance", () => {
+    const systemLaunchAgent = "/Library/LaunchAgents/com.interceptor.bridge.plist"
+    const applicationsBundle = "/Applications/interceptor-bridge.app"
+    const exists = existsFor([systemLaunchAgent, applicationsBundle])
+    const layout = getBridgeRecoveryLayout({
+      exists,
+      home,
+      importMetaUrl: daemonImportMetaUrl,
+      uid,
+    })
+
+    const error = formatBridgeUnavailableError(layout, { launchAgentLoaded: true })
+    expect(error).not.toContain("launchctl bootstrap")
+    expect(error).toContain("kickstart")
+  })
+
   test("repo fallback uses the repo bundle before the bare binary", () => {
     const exists = existsFor([repoBundlePath, repoDistBinaryPath])
     const layout = getBridgeRecoveryLayout({

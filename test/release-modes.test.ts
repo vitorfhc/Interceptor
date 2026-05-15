@@ -16,6 +16,22 @@ const REPO_ROOT = resolve(import.meta.dir, "..")
 const RELEASE_SCRIPT = resolve(REPO_ROOT, "scripts/release.sh")
 const TEST_VERSION = "0.0.0-test"
 
+/**
+ * True on macOS. The whole describe block below is gated behind this.
+ *
+ * scripts/release.sh exercises the macOS-only release pipeline: codesign,
+ * productbuild, xcrun notarytool/stapler, /Volumes/ disk images, .pkg signing.
+ * None of this is meaningful on Linux. The dry-run still emits the script
+ * commands, but the assertions are written against macOS-specific paths and
+ * would be misleading if they ran on Linux.
+ */
+const IS_DARWIN = process.platform === "darwin"
+
+/**
+ * Run scripts/release.sh in dry-run mode at a fixed test version and capture
+ * stdout/stderr/exit status. Sets `INTERCEPTOR_DRY_RUN=1` so the script never
+ * shells out to codesign/notarytool or produces real .pkg artifacts.
+ */
 function runReleaseDryRun(args: string[]): {
   stdout: string
   stderr: string
@@ -38,7 +54,7 @@ function runReleaseDryRun(args: string[]): {
   }
 }
 
-describe("release modes — dry-run", () => {
+describe.skipIf(!IS_DARWIN)("release modes — dry-run", () => {
   test("--browser-only emits Browser pkg and zero bridge artifacts", () => {
     const { stdout, status } = runReleaseDryRun(["--browser-only"])
     expect(status).toBe(0)
@@ -127,11 +143,11 @@ describe("release modes — dry-run", () => {
     expect(stdout).toContain("Interceptor-Daemon-Browser.pkg")
     expect(stdout).toContain("Interceptor-Daemon-Full.pkg")
 
-    // Step 13 must publish both pkgs to Sparkle.
-    expect(stdout).toMatch(
-      /append appcast item \(browser-only, minSysVer 11\.0\)/,
-    )
-    expect(stdout).toMatch(/append appcast item \(full, minSysVer 14\.0\)/)
+    // Step 13 must defer to the standalone publish script and surface the
+    // command in the operator-facing output. release.sh stops at notarization
+    // + stapling so the maintainer can test the .pkg before pushing to Sparkle.
+    expect(stdout).toContain("Sparkle publish — SKIPPED")
+    expect(stdout).toContain("bash scripts/publish-sparkle.sh")
   })
 
   test("--browser-only and --full are mutually exclusive", () => {
@@ -179,24 +195,21 @@ describe("release modes — dry-run", () => {
     expect(fullOut).not.toContain("scripts/release/postinstall-browser ")
   })
 
-  test("Sparkle appcast emits one item per built pkg with mode-tagged channel", () => {
+  test("Sparkle publish is decoupled — release.sh skips Step 13 and points at the standalone script", () => {
     const both = runReleaseDryRun([]).stdout
-    // Two distinct DRY appcast lines, one per mode, each carrying the
-    // mode label and minSysVer that distribution-browser.xml / .xml encode.
-    expect(both).toMatch(
-      /append appcast item \(browser-only, minSysVer 11\.0\)/,
-    )
-    expect(both).toMatch(/append appcast item \(full, minSysVer 14\.0\)/)
+    // release.sh no longer auto-publishes to Sparkle; that step lives in
+    // scripts/publish-sparkle.sh so the maintainer can test the .pkg
+    // locally before broadcasting an auto-update.
+    expect(both).toContain("Sparkle publish — SKIPPED")
+    expect(both).toContain("bash scripts/publish-sparkle.sh")
+    expect(both).not.toMatch(/append appcast item/)
   })
 
-  test("Browser pkg stages the browser-surface skills only", () => {
+  test("Browser pkg stages the browser-surface skill only", () => {
     const { stdout, status } = runReleaseDryRun(["--browser-only"])
     expect(status).toBe(0)
 
-    // Browser daemon staging must include the two browser-surface skills.
-    expect(stdout).toContain(
-      ".agents/skills/interceptor /Volumes",
-    )
+    // Browser daemon staging must include the browser-surface skill.
     expect(stdout).toContain(
       ".agents/skills/interceptor-browser /Volumes",
     )
@@ -204,13 +217,10 @@ describe("release modes — dry-run", () => {
     expect(stdout).not.toContain(".agents/skills/interceptor-macos")
   })
 
-  test("Full pkg stages all three skills (browser two + macOS one)", () => {
+  test("Full pkg stages both the browser-surface and macOS skills", () => {
     const { stdout, status } = runReleaseDryRun(["--full"])
     expect(status).toBe(0)
 
-    expect(stdout).toContain(
-      ".agents/skills/interceptor /Volumes",
-    )
     expect(stdout).toContain(
       ".agents/skills/interceptor-browser /Volumes",
     )

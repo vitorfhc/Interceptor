@@ -1290,3 +1290,5 @@ bash scripts/build.sh # Build compiled host binaries and extension bundles
 - [Ron Eddings](https://github.com/ronaldeddings/) created Interceptor.
 - [Pedram Amini](https://github.com/pedramamini/) provided early feedback on the project. Pedram's platform, [Maestro](https://runmaestro.ai), was used as part of developing this project.
 - [Daniel Miessler](https://github.com/danielmiessler/) for graciously coming up with the name `Interceptor` and EPIC project, [PAI](https://github.com/danielmiessler/PAI))
+- [Klaus Agnoletti](https://github.com/klausagnoletti/) contributed Microsoft Edge and Vivaldi installer support — [PR #75](https://github.com/Hacker-Valley-Media/Interceptor/pull/75).
+- [Alex Tabisz](https://github.com/atabisz/) contributed Linux (browser-only) support and made the macOS CoreGraphics FFI lazy so the daemon imports cleanly on non-Darwin — [PR #83](https://github.com/Hacker-Valley-Media/Interceptor/pull/83).

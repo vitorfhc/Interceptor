@@ -2,7 +2,15 @@ import { dlopen, FFIType } from "bun:ffi"
 
 const CG_PATH = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
 
-const cg = dlopen(CG_PATH, {
+// PR #83:CoreGraphics is macOS-only. Loading it on Linux throws
+// ERR_DLOPEN_FAILED at module load time and crashes the daemon before the
+// native-messaging handshake (port 19222 stays unbound; extension reports
+// "native host disconnected"). Gating the dlopen lets this module import
+// cleanly on Linux; each exported os* function short-circuits to UNSUPPORTED
+// below.
+const IS_DARWIN = process.platform === "darwin"
+
+const cg = IS_DARWIN ? dlopen(CG_PATH, {
   CGEventCreateMouseEvent: {
     args: [FFIType.ptr, FFIType.i32, FFIType.f64, FFIType.f64, FFIType.i32],
     returns: FFIType.ptr,
@@ -39,7 +47,9 @@ const cg = dlopen(CG_PATH, {
     args: [FFIType.ptr],
     returns: FFIType.void,
   },
-})
+}) : null
+
+const UNSUPPORTED = { success: false as const, error: "act --os not supported on this platform (macOS only)" }
 
 const kCGHIDEventTap = 0
 const kCGSessionEventTap = 1
@@ -79,7 +89,7 @@ function getSource(): number | null {
     // `isTrusted: true` user input. The previous value
     // kCGEventSourceStateCombinedSessionState (0) is for observing the merged
     // session stream — events posted from that source land on the page but
-    // are not treated as trusted by Chromium, which made `--os` clicks
+    // are not treated as trusted by Chromium, which made `--trusted` clicks
     // silently fail any `event.isTrusted` gate (e.g. bench S8 Trusted Input
     // Gate; the bench's prior S8 PASS rate came from agent hallucination,
     // not from the click actually flipping the page state).
@@ -89,7 +99,7 @@ function getSource(): number | null {
   return eventSource
 }
 
-const sym = cg.symbols as Record<string, (...args: any[]) => any>
+const sym = (cg ? cg.symbols : {}) as Record<string, (...args: any[]) => any>
 
 function createMouseEvent(type: number, x: number, y: number, button: number = kCGMouseButtonLeft): number | null {
   const src = getSource()
@@ -125,6 +135,7 @@ export async function osClick(
   button: "left" | "right" = "left",
   clickCount: number = 1
 ): Promise<{ success: boolean; error?: string }> {
+  if (!IS_DARWIN) return UNSUPPORTED
   try {
     const isRight = button === "right"
     const cgButton = isRight ? kCGMouseButtonRight : kCGMouseButtonLeft
@@ -192,6 +203,7 @@ export async function osKey(
   key: string,
   modifiers: string[] = []
 ): Promise<{ success: boolean; error?: string }> {
+  if (!IS_DARWIN) return UNSUPPORTED
   try {
     const keyCode = KEY_MAP[key] ?? KEY_MAP[key.toLowerCase()]
     if (keyCode === undefined) {
@@ -260,6 +272,7 @@ export async function osKey(
 }
 
 export async function osType(text: string): Promise<{ success: boolean; error?: string }> {
+  if (!IS_DARWIN) return UNSUPPORTED
   try {
     for (const char of text) {
       const keyCode = KEY_MAP[char] ?? KEY_MAP[char.toLowerCase()]
@@ -291,8 +304,17 @@ export async function osType(text: string): Promise<{ success: boolean; error?: 
       } else {
         const down = createKeyboardEvent(0, true)
         if (!down) continue
-        const encoded = new Uint16Array([char.charCodeAt(0)])
-        sym.CGEventKeyboardSetUnicodeString(down, 1, encoded)
+        // PR #83:encode the full UTF-16 code-unit sequence of the
+        // iterated grapheme. `for…of` yields one code point per iteration,
+        // which is 1 UTF-16 code unit for BMP characters and 2 (surrogate
+        // pair) for astral-plane characters / emoji. Apple's
+        // keyboardSetUnicodeString takes `stringLength` in UniChar
+        // (UTF-16 code units) per CoreGraphics/CGEvent/
+        // keyboardSetUnicodeString(stringLength_unicodeString_).md:12 —
+        // sending length=1 for an astral pair dropped the trailing
+        // surrogate and produced a mojibake codepoint.
+        const encoded = Uint16Array.from({ length: char.length }, (_, i) => char.charCodeAt(i))
+        sym.CGEventKeyboardSetUnicodeString(down, encoded.length, encoded)
         postEvent(down)
         releaseEvent(down)
 
@@ -300,7 +322,7 @@ export async function osType(text: string): Promise<{ success: boolean; error?: 
 
         const up = createKeyboardEvent(0, false)
         if (up) {
-          sym.CGEventKeyboardSetUnicodeString(up, 1, encoded)
+          sym.CGEventKeyboardSetUnicodeString(up, encoded.length, encoded)
           postEvent(up)
           releaseEvent(up)
         }
@@ -319,6 +341,7 @@ export async function osMove(
   points: Array<{ x: number; y: number }>,
   durationMs: number = 100
 ): Promise<{ success: boolean; error?: string }> {
+  if (!IS_DARWIN) return UNSUPPORTED
   try {
     if (points.length === 0) return { success: false, error: "empty path" }
 

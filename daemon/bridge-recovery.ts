@@ -150,11 +150,20 @@ export function getBridgeRecoveryActions(layout: BridgeRecoveryLayout, exists: E
   return actions
 }
 
-export function formatBridgeUnavailableError(layout: BridgeRecoveryLayout): string {
+export function formatBridgeUnavailableError(
+  layout: BridgeRecoveryLayout,
+  opts: { launchAgentLoaded?: boolean } = {},
+): string {
   if (layout.mode === "browser-only") {
     return "Interceptor macOS control requires a full install. Run `interceptor upgrade --full`."
   }
   if (layout.mode === "full-install") {
+    // Plist file on disk but never bootstrapped into launchd: kickstart will
+    // fail with "Could not find service ... in domain". Tell the user to
+    // bootstrap, not kickstart.
+    if (layout.launchAgentInstalled && opts.launchAgentLoaded === false && layout.launchAgentPath) {
+      return `Interceptor bridge is not reachable. The LaunchAgent plist at ${layout.launchAgentPath} is on disk but is NOT bootstrapped into your gui/$(id -u) domain (the pkg postinstall's bootstrap likely failed silently). Fix: \`launchctl bootstrap gui/$(id -u) ${layout.launchAgentPath} && launchctl kickstart -k gui/$(id -u)/com.interceptor.bridge\`, or log out and back in.`
+    }
     return "Interceptor bridge is not reachable. Run `interceptor status` and restart `com.interceptor.bridge` with `launchctl kickstart -k gui/$(id -u)/com.interceptor.bridge`."
   }
   return "Interceptor bridge is not reachable from this source checkout. Run `bash scripts/build-bridge.sh && bash scripts/install-bridge.sh`."

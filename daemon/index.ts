@@ -1,5 +1,5 @@
 import { unlinkSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "node:fs"
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-loader"
 import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, transportLabel } from "../shared/platform"
 import {
@@ -49,6 +49,25 @@ function readBridgeRecoveryLayout() {
     importMetaUrl: import.meta.url,
     uid: typeof process.getuid === "function" ? process.getuid() : null,
   })
+}
+
+// Probe whether the bridge LaunchAgent is actually bootstrapped into the
+// user's GUI domain. A plist file existing on disk doesn't mean it's loaded —
+// pkg postinstalls can (and do) fail the bootstrap call silently, leaving the
+// agent unregistered. Distinguishes "user should kickstart" from "user must
+// bootstrap first". Returns false on non-darwin or when the probe fails.
+function isLaunchAgentBootstrapped(): boolean {
+  if (process.platform !== "darwin") return false
+  if (typeof process.getuid !== "function") return false
+  try {
+    const result = spawnSync("launchctl", ["print", `gui/${process.getuid()}/com.interceptor.bridge`], {
+      encoding: "utf-8",
+      stdio: ["ignore", "ignore", "ignore"],
+    })
+    return result.status === 0
+  } catch {
+    return false
+  }
 }
 
 async function waitForBridgeSocket(timeoutMs: number): Promise<boolean> {
@@ -888,7 +907,7 @@ try {
                 } else {
                   socketWriteFramed(socket, JSON.stringify({
                     id,
-                    result: { success: false, error: formatBridgeUnavailableError(readBridgeRecoveryLayout()) },
+                    result: { success: false, error: formatBridgeUnavailableError(readBridgeRecoveryLayout(), { launchAgentLoaded: isLaunchAgentBootstrapped() }) },
                   }))
                 }
               })

@@ -566,40 +566,25 @@ if [[ "$DRY_RUN" != "1" ]]; then
   rm -f "$UNSIGNED_BROWSER_PKG" "$UNSIGNED_FULL_PKG"
 fi
 
-# ── Step 13: Publish Sparkle appcast ──────────────────────────────────────────
-# For each pkg built, copy into the Sparkle host's public/ dir, run sign_update
-# to get the EdDSA signature, and emit one appcast item per pkg. Sparkle's
-# generate_appcast doesn't support .pkg updates per its docs; we mutate
-# appcast.xml ourselves via inline Python.
-echo "==> Step 13: Publishing Sparkle appcast"
+# ── Step 13: Publish Sparkle appcast — REMOVED ────────────────────────────────
+# Sparkle publish is intentionally NOT part of release.sh anymore. Auto-pushing
+# the appcast inside the same script that produced the .pkg meant a fresh build
+# went straight into the auto-update pipeline with no human-in-the-loop test
+# gate. Run `bash scripts/publish-sparkle.sh` AFTER testing the .pkg locally,
+# only when you're sure the build is good.
+echo "==> Step 13: Sparkle publish — SKIPPED (run separately after testing)"
+echo "    Test the .pkg locally, then publish with:"
+echo "        bash scripts/publish-sparkle.sh"
+echo "    See scripts/publish-sparkle.sh --help for flags."
 
-if [[ "$DRY_RUN" == "1" ]]; then
-  for mode in "${MODES[@]}"; do
-    case "$mode" in
-      browser-only) echo "    DRY: copy $SIGNED_BROWSER_PKG → \$SPARKLE_HOST_DIR/public/, sign_update, append appcast item (browser-only, minSysVer 11.0)" ;;
-      full)         echo "    DRY: copy $SIGNED_FULL_PKG → \$SPARKLE_HOST_DIR/public/, sign_update, append appcast item (full, minSysVer 14.0)" ;;
-    esac
-  done
-  echo "    DRY: rwh up --service interceptor-updates --detach (if rwh on PATH)"
-else
-  # Cache Sparkle's CLI tools (sign_update) on first use.
-  if [ ! -x "$SPARKLE_TOOLS_DIR/bin/sign_update" ]; then
-    echo "    Caching Sparkle $SPARKLE_VERSION tools in $SPARKLE_TOOLS_DIR"
-    mkdir -p "$SPARKLE_TOOLS_DIR"
-    curl -sSL "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz" \
-      -o "$SPARKLE_TOOLS_DIR/sparkle.tar.xz"
-    tar xf "$SPARKLE_TOOLS_DIR/sparkle.tar.xz" -C "$SPARKLE_TOOLS_DIR"
-    rm -f "$SPARKLE_TOOLS_DIR/sparkle.tar.xz"
-  fi
-
+# Below is the old Step 13 publish function, kept dormant so the script doesn't
+# need to redefine SIGNED_*_PKG etc. The whole `if false` block is deliberately
+# dead — Sparkle publish lives in scripts/publish-sparkle.sh now.
+if false; then
   if [ ! -d "$SPARKLE_HOST_DIR" ]; then
-    echo "WARN: Sparkle host dir missing at $SPARKLE_HOST_DIR" >&2
-    echo "      Skipping appcast publish. Set INTERCEPTOR_SPARKLE_HOST_DIR" >&2
-    echo "      or check out the Interceptor-Updates-Sparkle project there." >&2
+    HOST_PUBLIC=""
   else
     HOST_PUBLIC="$SPARKLE_HOST_DIR/public"
-    mkdir -p "$HOST_PUBLIC"
-
     publish_to_sparkle() {
       local mode="$1" signed_pkg="$2" pkg_basename min_sys_ver title sig_line
       pkg_basename="$(basename "$signed_pkg")"
@@ -730,13 +715,13 @@ if [[ "$BUILD_FULL" == "1" ]]; then
   fi
 fi
 echo ""
-echo "Sparkle feed:  ${DOWNLOAD_URL_PREFIX}appcast.xml"
-if [[ "$BUILD_BROWSER" == "1" ]]; then
-  echo "Browser URL:   ${DOWNLOAD_URL_PREFIX}Interceptor-Browser-${VERSION}.pkg"
-fi
-if [[ "$BUILD_FULL" == "1" ]]; then
-  echo "Full URL:      ${DOWNLOAD_URL_PREFIX}Interceptor-Full-${VERSION}.pkg"
-fi
+echo "Next steps:"
+echo "  1. Test the .pkg(s) locally (open or installer)."
+echo "  2. When verified, push to the Sparkle update feed:"
+echo "       bash scripts/publish-sparkle.sh"
+echo ""
+echo "Once published, the appcast feed will be:"
+echo "       ${DOWNLOAD_URL_PREFIX}appcast.xml"
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "DRY-RUN complete."
 fi
