@@ -2,6 +2,7 @@ import { HELP, helpForCommand } from "./help"
 import { parseTabFlag } from "./parse"
 import { formatState, formatTabs, formatCookies, formatResult } from "./format"
 import { sendCommand, sendCommandWs, type DaemonResult, type DaemonResponse } from "./transport"
+import { fromPassive, writeExport, type PassiveNetEntry, type ExportFormat } from "../shared/exports"
 import { ensureDaemon } from "./daemon-spawn"
 import { parseStateCommand } from "./commands/state"
 import { parseActionsCommand } from "./commands/actions"
@@ -255,6 +256,34 @@ async function main() {
       delete d.save
       delete d.dataUrl
       process.stderr.write(`saved: ${d.filePath}\n`)
+    }
+
+    // Net-log export: route through the new format pipeline when --format is set
+    // and not the default text. Text remains on the existing formatResult path.
+    if (action.type === "net_log" && result.success && action.format && action.format !== "text") {
+      const format = action.format as ExportFormat
+      const entries = (result.data as PassiveNetEntry[] | undefined) || []
+      const captures = fromPassive(entries)
+      try {
+        await writeExport({
+          format,
+          captures,
+          meta: {
+            generatorName: "interceptor",
+            generatorVersion: VERSION,
+            generatedAt: new Date(),
+            source: "net-log",
+            comment: `net log buffer dump (${captures.length} entries)`,
+          },
+          out: action.out as string | undefined,
+        })
+        // pcapng with --out: also report saved path. har/json with --out: same. Both go to stderr so stdout stays clean.
+        if (action.out) process.stderr.write(`saved: ${action.out}\n`)
+      } catch (err) {
+        console.error(`error: ${(err as Error).message}`)
+        process.exit(1)
+      }
+      return
     }
 
     // Pretty-print known result types

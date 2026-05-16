@@ -252,16 +252,47 @@ async function sendArmToTab(
   tabId: number,
   sessionId: string,
   startedAt: number,
-  documentId?: string
+  documentId?: string,
+  armOpts?: { persistBodies?: boolean; bodyCapBytes?: number },
 ): Promise<{ success: boolean; error?: string }> {
   const check = await ensureContentScript(tabId, documentId)
   if (!check.connected) return { success: false, error: check.error }
   try {
-    await sendTabMessage(tabId, { type: "monitor_arm", sessionId, startedAt }, documentId)
+    await sendTabMessage(
+      tabId,
+      {
+        type: "monitor_arm",
+        sessionId,
+        startedAt,
+        ...(armOpts?.persistBodies ? { persistBodies: true } : {}),
+        ...(armOpts?.bodyCapBytes ? { bodyCapBytes: armOpts.bodyCapBytes } : {}),
+      },
+      documentId,
+    )
     return { success: true }
   } catch (err) {
     return { success: false, error: (err as Error).message }
   }
+}
+
+/**
+ * Re-arm a tab inheriting the session's persistence policy (from `monitor_start`).
+ * Used for child-tab attaches, history navs, focus switches, resume — anywhere
+ * the content script needs to come back online inside an already-active session.
+ */
+async function rearmTabForSession(
+  tabId: number,
+  session: SessionRecord,
+  documentId?: string,
+): Promise<{ success: boolean; error?: string }> {
+  const sRec = session as SessionRecord & { _persistBodies?: boolean; _bodyCapBytes?: number }
+  return sendArmToTab(
+    tabId,
+    session.sessionId,
+    session.startedAt,
+    documentId,
+    { persistBodies: sRec._persistBodies, bodyCapBytes: sRec._bodyCapBytes },
+  )
 }
 
 async function sendDisarmToTab(tabId: number, documentId?: string): Promise<unknown> {
@@ -374,7 +405,7 @@ function registerWebNavListenersOnce(): void {
       tt: details.transitionType,
       tq: details.transitionQualifiers
     })
-    void sendArmToTab(details.tabId, session.sessionId, session.startedAt, current?.documentId).then((res) => {
+    void rearmTabForSession(details.tabId, session, current?.documentId).then((res) => {
       if (!res.success) console.error(`re-arm after history nav failed on tab ${details.tabId}:`, res.error)
     })
   })
@@ -396,7 +427,7 @@ function registerWebNavListenersOnce(): void {
       tt: details.transitionType,
       tq: details.transitionQualifiers
     })
-    void sendArmToTab(details.tabId, session.sessionId, session.startedAt, current?.documentId).then((res) => {
+    void rearmTabForSession(details.tabId, session, current?.documentId).then((res) => {
       if (!res.success) console.error(`re-arm after fragment nav failed on tab ${details.tabId}:`, res.error)
     })
   })
@@ -406,7 +437,7 @@ function registerWebNavListenersOnce(): void {
     const session = getActiveSessionForTab(details.tabId)
     if (!session || session.paused) return
     const current = getCurrentAttachment(session)
-    void sendArmToTab(details.tabId, session.sessionId, session.startedAt, current?.documentId).then((res) => {
+    void rearmTabForSession(details.tabId, session, current?.documentId).then((res) => {
       if (!res.success) console.error(`re-arm after navigation completed failed on tab ${details.tabId}:`, res.error)
     })
   })
@@ -479,7 +510,7 @@ async function handleFocusActivated(tabId: number): Promise<void> {
   )
   switchToAttachment(session, next, "focus_switch")
 
-  const armRes = await sendArmToTab(tabId, session.sessionId, session.startedAt, ctx.documentId)
+  const armRes = await rearmTabForSession(tabId, session, ctx.documentId)
   if (!armRes.success) {
     console.error(`focus_switch arm failed for tab ${tabId}: ${armRes.error}`)
   }
@@ -710,10 +741,22 @@ export async function handleMonitorActions(
         activeAttachmentKey: initialAttachment.key
       }
 
-      const armResult = await sendArmToTab(resolvedTabId, sessionId, startedAt, initialAttachment.documentId)
+      const persistBodies = action.persistBodies === true
+      const bodyCapBytes = typeof action.bodyCapBytes === "number" ? action.bodyCapBytes : undefined
+      const armResult = await sendArmToTab(
+        resolvedTabId,
+        sessionId,
+        startedAt,
+        initialAttachment.documentId,
+        { persistBodies, bodyCapBytes },
+      )
       if (!armResult.success) {
         return { success: false, error: armResult.error, tabId: resolvedTabId }
       }
+      // Remember the session-wide persistence policy on the SessionRecord so
+      // child-tab re-arms (e.g. via mon_attach) inherit it.
+      ;(session as SessionRecord & { _persistBodies?: boolean; _bodyCapBytes?: number })._persistBodies = persistBodies
+      ;(session as SessionRecord & { _persistBodies?: boolean; _bodyCapBytes?: number })._bodyCapBytes = bodyCapBytes
 
       sessions.set(sessionId, session)
       activeSessionByTab.set(resolvedTabId, sessionId)
@@ -873,7 +916,7 @@ export async function handleMonitorActions(
         t: Date.now(),
         ...(current ? { tid: current.tabId, doc: current.documentId } : {})
       })
-      const armResult = await sendArmToTab(resolvedTabId, sid, session.startedAt, current?.documentId)
+      const armResult = await rearmTabForSession(resolvedTabId, session, current?.documentId)
       if (!armResult.success) {
         console.error(`re-arm after resume failed on tab ${resolvedTabId}:`, armResult.error)
       }

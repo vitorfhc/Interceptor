@@ -38,7 +38,11 @@ const SCROLL_THROTTLE_MS = 100
 
 let mutationObserver: MutationObserver | null = null
 
-const NET_BODY_PREVIEW_CAP = 64 * 1024
+const NET_BODY_PREVIEW_CAP_DEFAULT = 64 * 1024
+// When --persist-bodies is on, the session widens the cap and bypasses the
+// cause + MIME-allowlist gates.
+let netBodyCap = NET_BODY_PREVIEW_CAP_DEFAULT
+let persistBodiesAlways = false
 
 type CapturedListener = { type: string; fn: EventListener; opts: AddEventListenerOptions }
 const attachedListeners: CapturedListener[] = []
@@ -129,10 +133,12 @@ function redactSensitiveText(text: string): string {
 
 function buildBodyPreview(contentType: string, body: string): { preview: string; bytes: number; truncated: boolean } | null {
   if (!body) return null
-  if (!shouldPersistBody(contentType, body)) return null
+  // When --persist-bodies is off, keep the original MIME allowlist.
+  // When on, persist everything (still redacted, still capped).
+  if (!persistBodiesAlways && !shouldPersistBody(contentType, body)) return null
   const redacted = redactSensitiveText(body)
-  const truncated = redacted.length > NET_BODY_PREVIEW_CAP
-  const preview = truncated ? redacted.slice(0, NET_BODY_PREVIEW_CAP) : redacted
+  const truncated = redacted.length > netBodyCap
+  const preview = truncated ? redacted.slice(0, netBodyCap) : redacted
   return { preview, bytes: body.length, truncated }
 }
 
@@ -416,7 +422,10 @@ function onInterceptorNet(e: Event) {
     const now = Date.now()
     const cause = findCause(now)
     const contentType = truncate(detail.contentType || "", 120)
-    const preview = cause !== undefined
+    // When --persist-bodies is on, build a preview for every captured request,
+    // not just cause-tracked ones. Otherwise keep the original cause-gate so
+    // disk usage stays bounded for long sessions.
+    const preview = (persistBodiesAlways || cause !== undefined)
       ? buildBodyPreview(detail.contentType || "", detail.body || "")
       : null
     emit({
@@ -467,7 +476,11 @@ function attach(type: string, fn: EventListener, opts: AddEventListenerOptions) 
   attachedListeners.push({ type, fn, opts })
 }
 
-export function arm(newSessionId: string, _startedAt: number): void {
+export function arm(
+  newSessionId: string,
+  _startedAt: number,
+  opts?: { persistBodies?: boolean; bodyCapBytes?: number },
+): void {
   if (armed) return
   armed = true
   sessionId = newSessionId
@@ -478,6 +491,10 @@ export function arm(newSessionId: string, _startedAt: number): void {
   scrollAccX = 0
   scrollAccY = 0
   scrollLastEmit = 0
+  persistBodiesAlways = Boolean(opts?.persistBodies)
+  netBodyCap = typeof opts?.bodyCapBytes === "number" && opts.bodyCapBytes > 0
+    ? opts.bodyCapBytes
+    : NET_BODY_PREVIEW_CAP_DEFAULT
 
   const captureOpts: AddEventListenerOptions = { capture: true, passive: true }
 
@@ -550,7 +567,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== "object") return
   if (msg.type === "monitor_arm") {
     try {
-      arm(msg.sessionId as string, (msg.startedAt as number) || Date.now())
+      arm(
+        msg.sessionId as string,
+        (msg.startedAt as number) || Date.now(),
+        {
+          persistBodies: msg.persistBodies === true,
+          bodyCapBytes: typeof msg.bodyCapBytes === "number" ? msg.bodyCapBytes : undefined,
+        },
+      )
       sendResponse({ success: true, armed: true })
     } catch (err) {
       sendResponse({ success: false, error: (err as Error).message })

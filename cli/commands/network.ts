@@ -38,13 +38,22 @@ export function parseNetworkCommand(filtered: string[]): Action {
 
     case "net":
       switch (filtered[1]) {
-        case "log":
+        case "log": {
+          const formatRaw = filtered.includes("--format") ? filtered[filtered.indexOf("--format") + 1] : undefined
+          const allowedFormats = new Set(["text", "json", "har", "pcapng"])
+          if (formatRaw && !allowedFormats.has(formatRaw)) {
+            console.error(`error: --format must be one of text|json|har|pcapng (got '${formatRaw}')`)
+            process.exit(1)
+          }
           return {
             type: "net_log",
             filter: filtered.includes("--filter") ? filtered[filtered.indexOf("--filter") + 1] : undefined,
             since: filtered.includes("--since") ? parseInt(filtered[filtered.indexOf("--since") + 1]) : undefined,
-            limit: filtered.includes("--limit") ? parseInt(filtered[filtered.indexOf("--limit") + 1]) : undefined
+            limit: filtered.includes("--limit") ? parseInt(filtered[filtered.indexOf("--limit") + 1]) : undefined,
+            format: formatRaw,
+            out: filtered.includes("--out") ? filtered[filtered.indexOf("--out") + 1] : undefined
           }
+        }
         case "clear":
           return { type: "net_clear" }
         case "headers":

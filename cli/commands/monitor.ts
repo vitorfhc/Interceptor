@@ -16,6 +16,8 @@ import {
   readSessionMeta,
   readSessionNetArtifacts,
 } from "../../shared/monitor-artifacts"
+import { fromMonitorEvents, writeExport } from "../../shared/exports"
+import { VERSION } from "../version"
 
 type Action = { type: string; [key: string]: unknown }
 
@@ -574,6 +576,17 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
       const inst = flagValue(filtered, "--instruction")
       const action: Action = { type: "monitor_start" }
       if (inst) action.instruction = inst
+      // --persist-bodies persists response bodies for EVERY captured fetch/xhr,
+      // not just cause-tracked ones. Accepts an optional KB cap (default 64).
+      // Example: `monitor start --persist-bodies` or `--persist-bodies 256`.
+      const pbIdx = filtered.indexOf("--persist-bodies")
+      if (pbIdx !== -1) {
+        action.persistBodies = true
+        const next = filtered[pbIdx + 1]
+        if (next && /^\d+$/.test(next)) {
+          action.bodyCapBytes = parseInt(next) * 1024
+        }
+      }
       return action
     }
     case "stop":
@@ -648,19 +661,76 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
         console.error("error: interceptor monitor export requires a sessionId. Use 'interceptor monitor list' to find one.")
         process.exit(1)
       }
-      const json = flagPresent(filtered, "--json")
+      const formatRaw = flagValue(filtered, "--format")
+      const allowedFormats = new Set(["text", "json", "har", "pcapng", "plan"])
+      if (formatRaw && !allowedFormats.has(formatRaw)) {
+        console.error(`error: --format must be one of text|json|har|pcapng|plan (got '${formatRaw}')`)
+        process.exit(1)
+      }
+      const outPath = flagValue(filtered, "--out")
+      // `--json` honours both the parsed flag (when --json was passed after the
+      // sessionId) AND the global jsonMode set in cli/index.ts (when --json
+      // was passed before the subcommand and got stripped). Fixes issue #74.
+      const json = flagPresent(filtered, "--json") || jsonMode
       const plan = flagPresent(filtered, "--plan")
       const wb = flagPresent(filtered, "--with-bodies")
-      if (json) {
+
+      // New --format <har|pcapng|json> path takes precedence over the legacy
+      // --json / --plan booleans. Format `text` falls through to renderSession.
+      // Format `plan` falls through to the buildPlan branch below.
+      if (formatRaw === "har" || formatRaw === "pcapng" || formatRaw === "json") {
+        const meta = readSessionMeta(sid)
+        // Read the session's events timeline (fetch/xhr/sse rows) as the
+        // primary source; net.jsonl artifacts (body archive) enrich each row
+        // via cause-match when present.
         const events = readMonEvents(sid)
-        for (const ev of events) console.log(JSON.stringify(ev))
+        const netArtifacts = readSessionNetArtifacts(sid)
+        const captures = fromMonitorEvents(events, netArtifacts)
+        ;(async () => {
+          try {
+            await writeExport({
+              format: formatRaw,
+              captures,
+              meta: {
+                generatorName: "interceptor",
+                generatorVersion: VERSION,
+                generatedAt: new Date(),
+                source: "monitor-export",
+                session: meta
+                  ? {
+                      sid: meta.sessionId,
+                      startedAt: new Date(meta.startedAt).toISOString(),
+                      endedAt: meta.endedAt ? new Date(meta.endedAt).toISOString() : undefined,
+                      rootTabId: meta.rootTabId,
+                      instruction: meta.instruction,
+                      counts: meta.counts
+                        ? { evt: meta.counts.evt, mut: meta.counts.mut, net: meta.counts.net, nav: meta.counts.nav }
+                        : undefined,
+                    }
+                  : undefined,
+                comment: `monitor session ${sid} (${captures.length} entries)`,
+              },
+              out: outPath,
+            })
+            if (outPath) process.stderr.write(`saved: ${outPath}\n`)
+          } catch (err) {
+            console.error(`error: ${(err as Error).message}`)
+            process.exit(1)
+          }
+        })()
         return null
       }
-      if (plan) {
+
+      if (formatRaw === "plan" || plan) {
         const inclSynthetic = flagPresent(filtered, "--include-synthetic")
         let text = buildPlan(sid, inclSynthetic, wb)
         if (wb) text = withBodies(text, sid)
         console.log(text)
+        return null
+      }
+      if (json) {
+        const events = readMonEvents(sid)
+        for (const ev of events) console.log(JSON.stringify(ev))
         return null
       }
       console.log(renderSession(sid, wb))
@@ -676,14 +746,14 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
 const MONITOR_HELP = `interceptor monitor — record user sessions for agent replay
 
 Usage:
-  interceptor monitor start [--instruction "<text>"]
+  interceptor monitor start [--instruction "<text>"] [--persist-bodies [<KB>]]
   interceptor monitor stop
   interceptor monitor status
   interceptor monitor pause
   interceptor monitor resume
   interceptor monitor tail [--session <sid>] [--raw]
   interceptor monitor list
-  interceptor monitor export <sessionId> [--json|--plan] [--with-bodies]
+  interceptor monitor export <sessionId> [--format text|json|har|pcapng|plan] [--out <path>] [--json|--plan] [--with-bodies]
 
 start    Begin recording on the active interceptor-group tab.
 stop     End the active session and emit a summary.

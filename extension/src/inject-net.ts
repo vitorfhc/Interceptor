@@ -138,6 +138,15 @@ if ((window as any).__interceptor_net_installed) {
       const acceptHeader = (reqHeaders?.accept || reqHeaders?.Accept || "").toLowerCase()
       const isSse = contentType.includes("text/event-stream") || acceptHeader.includes("text/event-stream")
 
+      const responseHeaders: Record<string, string> = {}
+      try {
+        const setCookies = (response.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.()
+        response.headers.forEach((v, k) => { responseHeaders[k] = v })
+        if (setCookies && setCookies.length > 1) {
+          responseHeaders["set-cookie"] = setCookies.join("\n")
+        }
+      } catch {}
+
       if (isSse && response.body && !response.bodyUsed) {
         try {
           const reader = response.body.getReader()
@@ -165,7 +174,9 @@ if ((window as any).__interceptor_net_installed) {
                           type: "fetch",
                           timestamp: Date.now(),
                           truncated,
-                          contentType
+                          contentType,
+                          requestHeaders: reqHeaders || {},
+                          responseHeaders
                         }
                       }))
                       document.dispatchEvent(new CustomEvent("__interceptor_sse_done", {
@@ -231,7 +242,9 @@ if ((window as any).__interceptor_net_installed) {
               type: "fetch",
               timestamp: Date.now(),
               truncated: false,
-              contentType
+              contentType,
+              requestHeaders: reqHeaders || {},
+              responseHeaders
             }
           }))
         }).catch(() => {})
@@ -282,6 +295,22 @@ if ((window as any).__interceptor_net_installed) {
     this.addEventListener("load", function (this: XHRWithInterceptor) {
       try {
         const responseText = this.responseText
+        const responseHeaders: Record<string, string> = {}
+        try {
+          const raw = this.getAllResponseHeaders() || ""
+          for (const line of raw.split(/\r?\n/)) {
+            const idx = line.indexOf(":")
+            if (idx > 0) {
+              const name = line.slice(0, idx).trim().toLowerCase()
+              const value = line.slice(idx + 1).trim()
+              if (name in responseHeaders) {
+                responseHeaders[name] = responseHeaders[name] + "\n" + value
+              } else {
+                responseHeaders[name] = value
+              }
+            }
+          }
+        } catch {}
         document.dispatchEvent(new CustomEvent("__interceptor_net", {
           detail: {
             url: xhrUrl,
@@ -291,7 +320,9 @@ if ((window as any).__interceptor_net_installed) {
             type: "xhr",
             timestamp: Date.now(),
             truncated: false,
-            contentType: (this.getResponseHeader("content-type") || "").toLowerCase()
+            contentType: (this.getResponseHeader("content-type") || "").toLowerCase(),
+            requestHeaders: xhrHeaders || {},
+            responseHeaders
           }
         }))
       } catch {}

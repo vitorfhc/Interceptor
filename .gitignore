@@ -36,3 +36,7 @@ notary-log-*.json
 release-notes-*.md
 staging/
 /release/
+
+# Apple container runtime data dir (symlinked from ~/Library/Application Support/com.apple.container/)
+# Holds Linux container images + per-container VM disk state; never tracked.
+.container-data/

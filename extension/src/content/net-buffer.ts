@@ -9,6 +9,8 @@ type PassiveCapturedEntry = {
   tabUrl: string
   contentType?: string
   truncated?: boolean
+  requestHeaders?: Record<string, string>
+  responseHeaders?: Record<string, string>
 }
 const netBuffer: PassiveCapturedEntry[] = []
 
