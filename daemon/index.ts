@@ -1068,6 +1068,25 @@ try {
         log(`ws request: ${id} ${JSON.stringify(request.action).slice(0, 100)}`)
 
         const actionType = (request.action as { type?: string })?.type || "unknown"
+
+        if (request.contextId && !extensionWsMap.has(request.contextId)) {
+          const available = [...extensionWsMap.keys()]
+          const hint = available.length > 0
+            ? ` (connected: ${available.join(", ")})`
+            : " (no extensions connected)"
+          ws.send(JSON.stringify({ id, result: { success: false, error: `context '${request.contextId}' not found${hint}` } }))
+          return
+        }
+
+        if (!request.contextId && extensionWsMap.size !== 1) {
+          const available = [...extensionWsMap.keys()]
+          const error = available.length === 0
+            ? "no extensions connected"
+            : `multiple extensions connected, use --context <id> (connected: ${available.join(", ")})`
+          ws.send(JSON.stringify({ id, result: { success: false, error } }))
+          return
+        }
+
         const timer = setTimeout(() => {
           pendingRequests.delete(id)
           timedOutRequests.add(id)
