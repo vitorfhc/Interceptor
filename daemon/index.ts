@@ -1038,7 +1038,7 @@ try {
         if (request.type === "extension") {
           const ctxId = request.contextId ?? "default"
           const oldCtxId = (ws as any).__contextId
-          if (oldCtxId && oldCtxId !== ctxId) {
+          if (oldCtxId && oldCtxId !== ctxId && extensionWsMap.get(oldCtxId) === ws) {
             extensionWsMap.delete(oldCtxId)
           }
           ;(ws as any).__contextId = ctxId
@@ -1091,7 +1091,7 @@ try {
       },
       close(ws) {
         const ctxId = (ws as any).__contextId
-        if (ctxId) {
+        if (ctxId && extensionWsMap.get(ctxId) === ws) {
           extensionWsMap.delete(ctxId)
         }
         log(`ws client disconnected [context: ${ctxId ?? "unknown"}]`)

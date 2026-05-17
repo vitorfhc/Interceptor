@@ -218,9 +218,16 @@ export function connectWsChannel(): void {
     ws.onopen = async () => {
       wsChannel = ws
       wsReady = true
-      const contextId = await getOrCreateContextId()
-      ws.send(JSON.stringify({ type: "extension", contextId }))
       startWsKeepAlive()
+      const contextId = await getOrCreateContextId()
+      if (ws.readyState !== WebSocket.OPEN) return
+      try {
+        ws.send(JSON.stringify({ type: "extension", contextId }))
+      } catch (err) {
+        console.error("ws handshake send error:", err)
+        ws.close()
+        return
+      }
       console.log("ws channel connected")
       if (activeTransport !== "native") {
         activeTransport = "websocket"
