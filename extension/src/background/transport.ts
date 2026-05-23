@@ -1,6 +1,7 @@
 import { handleDaemonMessage, drainMessageQueue, pendingRequests } from "./message-dispatch"
 import { safeNativePortDisconnect, safeNativePortPing, safeNativePortPost, shouldSkipNativeKeepalive } from "./native-port-lifecycle"
 import { recoverPendingRequestsAfterNativeDisconnect } from "./pending-request-recovery"
+import { INITIAL_RECONNECT_DELAY_MS, delayWithJitter, nextReconnectDelay } from "./reconnect-lifecycle"
 
 type ActiveTransport = "none" | "native" | "websocket"
 export type HostDeliveryResult = "sent" | "queued" | "failed"
@@ -8,7 +9,10 @@ export type HostDeliveryResult = "sent" | "queued" | "failed"
 export let nativePort: chrome.runtime.Port | null = null
 export let activeTransport: ActiveTransport = "none"
 let isConnecting = false
-let reconnectDelay = 1000
+let nativeReconnectDelay = INITIAL_RECONNECT_DELAY_MS
+let wsReconnectDelay = INITIAL_RECONNECT_DELAY_MS
+let nativeReconnectTimer: ReturnType<typeof setTimeout> | null = null
+let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null
 
 let wsChannel: WebSocket | null = null
 let wsReady = false
@@ -57,6 +61,7 @@ function postNative(msg: unknown, port = nativePort): boolean {
   if (res.posted) return true
   console.error("nativePort.postMessage threw (port disconnected before onDisconnect fired):", res.error)
   clearNativeStateFor(port)
+  scheduleNativeReconnect()
   return false
 }
 
@@ -116,6 +121,28 @@ export function sendToHost(msg: unknown, forceWs?: boolean, allowQueue = false):
   return allowQueue ? enqueueOutboundRecovery(msg) : "failed"
 }
 
+function scheduleWsReconnect(): void {
+  if (wsReconnectTimer) return
+  if (wsChannel && (wsChannel.readyState === WebSocket.OPEN || wsChannel.readyState === WebSocket.CONNECTING)) return
+  const delay = delayWithJitter(wsReconnectDelay)
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null
+    connectWsChannel()
+  }, delay)
+  wsReconnectDelay = nextReconnectDelay(wsReconnectDelay)
+}
+
+function scheduleNativeReconnect(): void {
+  if (nativeReconnectTimer) return
+  if (nativePort || isConnecting) return
+  const delay = delayWithJitter(nativeReconnectDelay)
+  nativeReconnectTimer = setTimeout(() => {
+    nativeReconnectTimer = null
+    connectToHost()
+  }, delay)
+  nativeReconnectDelay = nextReconnectDelay(nativeReconnectDelay)
+}
+
 export function connectToHost(): void {
   if (nativePort || isConnecting) return
   isConnecting = true
@@ -125,6 +152,7 @@ export function connectToHost(): void {
   const handshakeTimer = setTimeout(() => {
     console.error("native host handshake timeout (10s)")
     disconnectNativePort(port)
+    scheduleNativeReconnect()
   }, 10000)
 
   port.onMessage.addListener((msg: {
@@ -138,7 +166,11 @@ export function connectToHost(): void {
         clearTimeout(handshakeTimer)
         pendingHandshakePort = null
         activeTransport = "native"
-        reconnectDelay = 1000
+        nativeReconnectDelay = INITIAL_RECONNECT_DELAY_MS
+        if (nativeReconnectTimer) {
+          clearTimeout(nativeReconnectTimer)
+          nativeReconnectTimer = null
+        }
         isConnecting = false
         console.log("native host connected (pong received)")
         emitEvent("connection_established")
@@ -164,6 +196,12 @@ export function connectToHost(): void {
     if (isWsOpen()) {
       activeTransport = "websocket"
       console.log("native host down but ws channel active, switching to websocket")
+      recoverPendingRequestsAfterNativeDisconnect(
+        pendingRequests,
+        (msg) => sendToHost(msg, true, true)
+      )
+      pendingRequests.clear()
+      scheduleNativeReconnect()
       return
     }
     recoverPendingRequestsAfterNativeDisconnect(
@@ -171,9 +209,7 @@ export function connectToHost(): void {
       (msg) => sendToHost(msg, true, true)
     )
     pendingRequests.clear()
-    const jitter = Math.random() * reconnectDelay * 0.3
-    setTimeout(connectToHost, reconnectDelay + jitter)
-    reconnectDelay = Math.min(reconnectDelay * 2, 30000)
+    scheduleNativeReconnect()
   })
 
   nativePort = port
@@ -183,6 +219,7 @@ export function connectToHost(): void {
     clearTimeout(handshakeTimer)
     clearNativeStateFor(port)
     isConnecting = false
+    scheduleNativeReconnect()
   }
 }
 
@@ -218,6 +255,10 @@ export function connectWsChannel(): void {
     ws.onopen = async () => {
       wsChannel = ws
       wsReady = true
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer)
+        wsReconnectTimer = null
+      }
       startWsKeepAlive()
       const contextId = await getOrCreateContextId()
       if (ws.readyState !== WebSocket.OPEN) return
@@ -231,7 +272,7 @@ export function connectWsChannel(): void {
       console.log("ws channel connected")
       if (activeTransport !== "native") {
         activeTransport = "websocket"
-        reconnectDelay = 1000
+        wsReconnectDelay = INITIAL_RECONNECT_DELAY_MS
         isConnecting = false
         console.log("connection ready via ws channel")
         drainMessageQueue()
@@ -255,14 +296,21 @@ export function connectWsChannel(): void {
       wsReady = false
       wsChannel = null
       if (activeTransport === "websocket") activeTransport = "none"
+      scheduleWsReconnect()
     }
     ws.onerror = () => {
       stopWsKeepAlive()
       wsReady = false
       wsChannel = null
       if (activeTransport === "websocket") activeTransport = "none"
+      scheduleWsReconnect()
     }
-  } catch {}
+  } catch {
+    wsReady = false
+    wsChannel = null
+    if (activeTransport === "websocket") activeTransport = "none"
+    scheduleWsReconnect()
+  }
 }
 
 // --- SW Keepalive responder (content script heartbeat) ---
@@ -286,8 +334,13 @@ export function registerStorageContextListener(): void {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local" || !changes.contextId) return
     const newId = changes.contextId.newValue
+    if (typeof newId !== "string" || newId.length === 0) return
     if (!newId || !wsChannel || wsChannel.readyState !== WebSocket.OPEN) return
-    wsChannel.send(JSON.stringify({ type: "extension", contextId: newId }))
+    try {
+      wsChannel.send(JSON.stringify({ type: "extension", contextId: newId }))
+    } catch (err) {
+      console.error("ws context re-register error:", err)
+    }
   })
 }
 

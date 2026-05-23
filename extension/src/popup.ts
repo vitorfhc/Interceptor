@@ -1,15 +1,16 @@
 const input = document.getElementById("contextId") as HTMLInputElement
 const saveBtn = document.getElementById("save") as HTMLButtonElement
 const resetBtn = document.getElementById("reset") as HTMLButtonElement
-const status = document.getElementById("status") as HTMLDivElement
+const statusEl = document.getElementById("status") as HTMLDivElement
 
 function showStatus(msg: string, ms = 1800) {
-  status.textContent = msg
-  setTimeout(() => { status.textContent = "" }, ms)
+  statusEl.textContent = msg
+  setTimeout(() => { statusEl.textContent = "" }, ms)
 }
 
 chrome.storage.local.get("contextId").then((stored) => {
-  if (stored.contextId) input.value = stored.contextId
+  const contextId = (stored as { contextId?: unknown }).contextId
+  if (typeof contextId === "string") input.value = contextId
 })
 
 saveBtn.addEventListener("click", async () => {

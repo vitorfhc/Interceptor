@@ -6,10 +6,9 @@ import { IPC_PORT, IS_WIN, SOCKET_PATH, WS_PORT } from "../shared/platform"
 
 export const INTERCEPTOR_TIMEOUT_MS = parseInt(process.env.INTERCEPTOR_TIMEOUT || "15000")
 
-// PRD-63 Spec 5: per-verb timeout overrides. SFSpeechRecognizer's
-// requestAuthorization is async and user-bounded — Apple does not place a
-// time bound on the consent prompt, so 15s is too short for first-time
-// `listen start` / `vad start`. 60s covers the documented user-prompt UX.
+// Speech permission prompts are async and user-bounded; 15s is too short
+// for first-time `listen start` / `vad start`. 60s covers the documented
+// user-prompt UX while preserving the normal timeout for other verbs.
 const ACTION_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   macos_listen: 60_000,
   macos_vad: 60_000,
@@ -19,8 +18,8 @@ function pickTimeoutForAction(actionType: string): number {
   return ACTION_TIMEOUT_OVERRIDES_MS[actionType] ?? INTERCEPTOR_TIMEOUT_MS
 }
 
-// PRD-63 Spec 5: branch the timeout hint on `macos_*` so bridge commands
-// don't get a Chrome/Brave-extension troubleshooting hint.
+// Branch the timeout hint on `macos_*` so bridge commands don't get a
+// Chrome/Brave-extension troubleshooting hint.
 function timeoutMessage(actionType: string, ms: number): string {
   const seconds = Math.round(ms / 1000)
   if (actionType.startsWith("macos_")) {

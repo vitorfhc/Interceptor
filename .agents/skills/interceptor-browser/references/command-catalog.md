@@ -31,7 +31,7 @@ interceptor find "Submit"
 interceptor find "Email" --role textbox
 
 interceptor act e7                                 # Click + read after
-interceptor act e9 "hello@example.com"             # Type into field
+interceptor act e9 "example user"                  # Type into field
 interceptor act e11 --keys "Enter"
 interceptor act e15 --trusted                      # HID-sourced click; page sees isTrusted: true. ESCALATION ONLY.
 interceptor act e20 --no-read
@@ -187,12 +187,12 @@ interceptor raw '{"type":"any_action","key":"value"}'
 
 ```bash
 interceptor contexts                                # List IDs of all connected browser contexts
-interceptor --context <id> read <url>               # Route command to a specific profile
+interceptor --context <id> read                     # Route command to a specific profile
 interceptor --context <id> open <url>
 interceptor --context <id> act e7 "value"
 ```
 
-Each browser profile auto-generates a stable UUID on first run (stored in `chrome.storage.local`). `contexts` lists all currently connected IDs. Without `--context`, commands go to the most-recently connected extension — backward-compatible with single-browser setups.
+Each browser profile auto-generates a stable UUID on first run (stored in `chrome.storage.local`). `contexts` lists all currently connected IDs. Without `--context`, commands auto-route only when exactly one context is connected; zero or multiple connected contexts fail fast and require `--context <id>`.
 
 Primary use case: two Chrome profiles logged in to different accounts simultaneously (cross-account security testing, multi-tenant verification).
 

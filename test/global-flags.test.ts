@@ -1,0 +1,26 @@
+import { describe, expect, test } from "bun:test"
+
+import { buildFilteredArgs } from "../cli/global-flags"
+
+describe("buildFilteredArgs", () => {
+  test("removes --context and only its value", () => {
+    expect(buildFilteredArgs(["read", "work", "--context", "work"])).toEqual(["read", "work"])
+  })
+
+  test("removes --tab and only its value", () => {
+    expect(buildFilteredArgs(["read", "42", "--tab", "42"])).toEqual(["read", "42"])
+  })
+
+  test("removes standalone global transport flags", () => {
+    expect(buildFilteredArgs(["read", "--ws", "--any-tab", "main"])).toEqual(["read", "main"])
+  })
+
+  test("removes global --json in leading positions", () => {
+    expect(buildFilteredArgs(["--json", "status"])).toEqual(["status"])
+    expect(buildFilteredArgs(["status", "--json"])).toEqual(["status"])
+  })
+
+  test("preserves command-local --json outside leading global positions", () => {
+    expect(buildFilteredArgs(["batch", "run", "--json", "payload"])).toEqual(["batch", "run", "--json", "payload"])
+  })
+})

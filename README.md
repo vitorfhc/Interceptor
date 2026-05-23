@@ -604,7 +604,7 @@ interceptor tab new "https://example.com/form"
 sleep 2
 interceptor tree                              # Find form fields
 interceptor type e3 "John Doe"               # Fill name
-interceptor type e5 "john@example.com"       # Fill email
+interceptor type e5 "example user"           # Fill field
 interceptor select e7 "option2"              # Pick dropdown
 interceptor click e10                         # Submit
 sleep 2
@@ -841,7 +841,7 @@ When AX clamps the request against `NSScreen.visibleFrame` (e.g. height
 exceeds the available rect after subtracting Dock + menu bar), the
 response sets `clamped: true` and includes `clampedTo` with the legitimate
 ceiling. The bridge runs one internal retry to absorb single-shot drift.
-See PRD-62 for the full contract.
+That response shape is the full contract for window geometry commands.
 
 ```jsonc
 // resize within visibleFrame
@@ -888,13 +888,13 @@ interceptor macos screenshot                     # Frontmost window
 interceptor macos screenshot --app "Finder"      # Specific app (works occluded / minimized / cross-Space)
 interceptor macos screenshot --save              # Save to disk; payload key is `filePath` (not `path`)
 interceptor macos capture start                  # Continuous 30fps capture
-interceptor macos capture status                 # PRD-63: {active, hasFrame, frameAgeMs}
-interceptor macos capture frame                  # PRD-63: returns {dataUrl, bytes, width, height, format} — parity with screenshot
+interceptor macos capture status                 # {active, hasFrame, frameAgeMs}
+interceptor macos capture frame                  # returns {dataUrl, bytes, width, height, format} — parity with screenshot
 interceptor macos capture frame --timeout-ms 5000  # Override the wait window for first-frame delivery
 interceptor macos capture stop                   # Stop
 ```
 
-The `--save` response contains `{ "filePath": "...", "format": ..., "bytes": ..., "width": ..., "height": ... }`. Read `filePath` for the path on disk. The `capture frame` response (PRD-63) mirrors the same metadata shape, with `dataUrl` replacing `filePath` for in-memory delivery.
+The `--save` response contains `{ "filePath": "...", "format": ..., "bytes": ..., "width": ..., "height": ... }`. Read `filePath` for the path on disk. The `capture frame` response mirrors the same metadata shape, with `dataUrl` replacing `filePath` for in-memory delivery.
 
 ### Daily-Driver Domain 4: Monitor (Teach and Replay)
 
@@ -1004,7 +1004,7 @@ interceptor macos sounds status                  # Current detected sounds
 
 #### Vision (on-device)
 
-PRD-63: Vision now derives `SCStreamConfiguration.width`/`height` from the
+Vision derives `SCStreamConfiguration.width`/`height` from the
 filter's `contentRect × pointPixelScale` (Apple's documented capture
 pattern), and `recognizeText` enables `automaticallyDetectsLanguage`,
 `recognitionLanguages = ["en-US"]`, and `usesLanguageCorrection`.
@@ -1017,10 +1017,10 @@ interceptor macos vision hands                   # Hand pose detection
 interceptor macos vision bodies                  # Body pose detection
 ```
 
-#### Apple Intelligence (on-device LLM via FoundationModels — PRD-65)
+#### Apple Intelligence (on-device LLM via FoundationModels)
 
-PRD-65 fixed the dispatch bug that previously made every `ai` verb return
-"not implemented" against fully-built `LanguageModelSession` handlers.
+The dispatch path now routes `ai` verbs to the built
+`LanguageModelSession` handlers instead of returning "not implemented".
 All three verbs are now functional on macOS 26+; older macOS surfaces a
 structured "FoundationModels requires macOS 26.0+" error.
 
@@ -1033,11 +1033,10 @@ interceptor macos ai session history         # current session transcript
 interceptor macos ai session end             # close session
 ```
 
-#### Sensitive content (on-device via SensitiveContentAnalysis — PRD-65)
+#### Sensitive content (on-device via SensitiveContentAnalysis)
 
-PRD-65 fixed the same dispatch bug for `sensitive`. The
-`SCSensitivityAnalyzer()` integration was already implemented; only the
-dispatch was broken.
+The `sensitive` verbs route to the existing `SCSensitivityAnalyzer()`
+integration.
 
 ```bash
 interceptor macos sensitive check            # current analysisPolicy state
@@ -1046,9 +1045,8 @@ interceptor macos sensitive monitor status   # monitor lifecycle
 
 #### NLP (on-device, NaturalLanguage framework)
 
-PRD-63 fixed the dispatch bug that previously made every `nlp` verb return
-"not implemented" against an already-built NaturalLanguage backend. All six
-verbs are functional:
+The `nlp` verbs route to the built NaturalLanguage backend. All six verbs
+are functional:
 
 ```bash
 interceptor macos nlp entities "Apple was founded in Cupertino"  # NLTagger / .nameType
@@ -1152,7 +1150,7 @@ interceptor macos text                           # Read selection / visible / fu
 
 Particles / titans / scene-script / HTML overlays. Panic hotkey `Ctrl+Opt+Cmd+Escape` closes every active overlay regardless of session. See [`docs/native/overlays.md`](docs/native/overlays.md) and [`docs/native/scene-script-cookbook.md`](docs/native/scene-script-cookbook.md).
 
-#### Documents (PRD-66)
+#### Documents
 
 ```bash
 interceptor macos pdf info|text|outline|annotations|forms|images|find|attributes|permissions|annotate|strip|merge|split <path>
@@ -1167,7 +1165,7 @@ interceptor macos thumbnail <path> [--size N|WxH] [--save] [--out <path>] [--for
 
 See [`docs/native/document.md`](docs/native/document.md) for PDFKit / DataDetection / Translation / QuickLookThumbnailing.
 
-#### Personal data (PRD-66; TCC-gated)
+#### Personal data (TCC-gated)
 
 ```bash
 interceptor macos auth confirm "<reason>" [--policy biometry|any|biometry-or-watch] [--reuse N]
@@ -1181,7 +1179,7 @@ interceptor macos music status|search|library|song|album|play|pause|resume|stop|
 
 See [`docs/native/personal-data.md`](docs/native/personal-data.md).
 
-#### Distribution (PRD-66)
+#### Distribution
 
 ```bash
 interceptor macos appintent list|registered|donate|update-parameters|supports
@@ -1256,7 +1254,7 @@ The CLI grammar reserves the `interceptor windows` namespace for a future Window
 
 `AGENTS.md` is the canonical repo instruction file for agentic tools. `CLAUDE.md` remains in the repo as a compatibility file for tools that still expect that filename.
 
-Shared repo-local skills live under [`.agents/skills/`](.agents/skills/). For cross-tool compatibility, [`.codex/skills`](.codex/skills), [`.claude/skills`](.claude/skills), and [`.gemini/skills`](.gemini/skills) all point at the same backing directory.
+Shared repo-local skills live under [`.agents/skills/`](.agents/skills/). Compatibility shims for other agent tools may point at the same backing directory.
 
 The skill packages mirror the surface split:
 

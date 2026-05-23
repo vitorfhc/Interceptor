@@ -23,6 +23,7 @@ import { runMacosCommand } from "./commands/macos"
 import { runUpgradeCommand } from "./commands/upgrade"
 import { runInitCommand } from "./commands/init"
 import { VERSION, BUILD_SHA, BUILD_DATE } from "./version"
+import { buildFilteredArgs } from "./global-flags"
 
 // Command → module routing
 const STATE_CMDS = new Set(["state", "tree", "diff", "find", "text", "html"])
@@ -86,16 +87,7 @@ async function main() {
   // by position: `--json` at index 0 or 1 is the global boolean (it's
   // always near the front, like `interceptor --json status`); deeper
   // occurrences are always domain value flags consumed by the parser.
-  const tabIdx = args.indexOf("--tab")
-  const ctxIdx = args.indexOf("--context")
-  const tabFilterSet = new Set(["--ws", "--any-tab"])
-  if (tabIdx !== -1) { tabFilterSet.add("--tab"); if (args[tabIdx + 1]) tabFilterSet.add(args[tabIdx + 1]) }
-  if (ctxIdx !== -1) { tabFilterSet.add("--context"); if (args[ctxIdx + 1]) tabFilterSet.add(args[ctxIdx + 1]) }
-  const filtered = args.filter((a, i) => {
-    if (tabFilterSet.has(a)) return false
-    if (a === "--json") return i > 1
-    return true
-  })
+  const filtered = buildFilteredArgs(args)
 
   if (filtered.length === 0 || filtered[0] === "help") {
     console.log(HELP)
@@ -167,7 +159,12 @@ async function main() {
   if (cmd === "contexts") {
     try {
       const response = await sendCommand({ type: "contexts" }, undefined, undefined)
-      const ids = (response.result.data as string[]) ?? []
+      const result = response.result
+      if (!result.success) {
+        console.error(`error: ${result.error || "failed to list browser contexts"}`)
+        process.exit(1)
+      }
+      const ids = Array.isArray(result.data) ? result.data as string[] : []
       if (jsonMode) {
         console.log(JSON.stringify(ids))
       } else if (ids.length === 0) {
@@ -188,7 +185,7 @@ async function main() {
   }
 
   if (OVERRIDE_CMDS.has(cmd)) {
-    await runOverride(filtered, { jsonMode, useWs, globalTabId })
+    await runOverride(filtered, { jsonMode, useWs, globalTabId, contextId: globalContextId })
     return
   }
 

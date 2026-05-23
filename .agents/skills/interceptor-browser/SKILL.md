@@ -18,7 +18,7 @@ interceptor status                        # 1. Confirm daemon + extension are al
 interceptor open "https://example.com"    # 2. Compound open: tab + wait + tree + text
 interceptor read                          # 3. Current state (re-read after any mutation)
 interceptor act e5                        # 4. Click ref e5 (refs come from `read`)
-interceptor act e7 "hello@example.com"    # 5. Type into ref e7
+interceptor act e7 "example user"         # 5. Type into ref e7
 interceptor inspect                       # 6. Tree + text + network in one read
 ```
 

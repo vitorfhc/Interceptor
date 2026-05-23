@@ -13,6 +13,7 @@ import {
 } from "../shared/monitor-artifacts"
 import { chooseOutboundTransport } from "./outbound-routing"
 import { formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
+import { clearDaemonRuntimeFiles, decideDaemonStartupRole, defaultLifecycleDeps, readPidState, spawnDetachedStandaloneDaemon } from "./lifecycle"
 
 // ── Native Bridge (interceptor-bridge) connection ────────────────────────────────
 const BRIDGE_SOCKET_PATH = "/tmp/interceptor-bridge.sock"
@@ -225,7 +226,8 @@ function sendToBridge(id: string, action: Record<string, unknown>, cliSocket: { 
 setTimeout(() => connectBridge(), 500)
 
 function log(msg: string) {
-  const line = `[${new Date().toISOString()}] ${msg}\n`
+  const mode = process.argv.includes("--standalone") ? "standalone" : "native-messaging"
+  const line = `[${new Date().toISOString()} pid:${process.pid} mode:${mode}] ${msg}\n`
   try { appendFileSync(LOG_PATH, line) } catch {}
 }
 
@@ -366,6 +368,7 @@ function persistNetArtifactFromEvent(ev: Record<string, unknown>): void {
 }
 
 const STANDALONE = process.argv.includes("--standalone")
+const NATIVE_STANDALONE_BOOT_TIMEOUT_MS = 5_000
 
 log(`daemon starting (mode: ${STANDALONE ? "standalone" : "native-messaging"})`)
 
@@ -433,24 +436,41 @@ async function startNativeRelay(existingPid: number): Promise<never> {
   while (true) await Bun.sleep(30_000)
 }
 
-if (existsSync(PID_PATH)) {
-  try {
-    const existingPid = parseInt(readFileSync(PID_PATH, "utf-8").trim().split("\n")[0])
-    if (!isNaN(existingPid) && existingPid !== process.pid) {
-      try {
-        process.kill(existingPid, 0)
-        if (STANDALONE) {
-          log(`another daemon already running (pid ${existingPid}) — exiting`)
-          process.exit(0)
-        }
-        // Native-messaging mode: become a relay instead of exiting
-        await startNativeRelay(existingPid)
-      } catch {
-        log(`stale pid file for dead process ${existingPid} — taking over`)
-      }
-    }
-  } catch {}
+function lifecycleDeps() {
+  return {
+    ...defaultLifecycleDeps({ pidPath: PID_PATH, socketPath: SOCKET_PATH, isWin: IS_WIN }),
+    log,
+  }
 }
+
+async function bootstrapDaemonRole(): Promise<void> {
+  const deps = lifecycleDeps()
+  const state = readPidState(deps)
+  const decision = decideDaemonStartupRole(STANDALONE, state)
+
+  if (decision.action === "exit") {
+    log(`another daemon already running (pid ${decision.pid}) — exiting`)
+    process.exit(0)
+  }
+
+  if (decision.action === "relay") {
+    await startNativeRelay(decision.pid)
+  }
+
+  if (decision.action === "clear-and-continue" || decision.action === "clear-and-spawn") {
+    clearDaemonRuntimeFiles(deps, decision.reason)
+  }
+
+  if (decision.action === "spawn" || decision.action === "clear-and-spawn") {
+    const standalonePid = await spawnDetachedStandaloneDaemon(deps, NATIVE_STANDALONE_BOOT_TIMEOUT_MS)
+    if (standalonePid) {
+      await startNativeRelay(standalonePid)
+    }
+    log("native bootstrap failed to start detached singleton — falling back to in-process singleton")
+  }
+}
+
+await bootstrapDaemonRole()
 
 try { if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH) } catch {}
 

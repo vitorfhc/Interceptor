@@ -8,6 +8,12 @@
 import { sendCommand, sendCommandWs, type DaemonResponse } from "../transport"
 
 type Result = { success: boolean; error?: string; data?: unknown }
+type OverrideSender = (
+  action: { type: string; [key: string]: unknown },
+  tabId?: number,
+  useWs?: boolean,
+  contextId?: string
+) => Promise<Result>
 
 function unwrap(resp: DaemonResponse): Result {
   return resp.result
@@ -16,12 +22,13 @@ function unwrap(resp: DaemonResponse): Result {
 async function send(
   action: { type: string; [key: string]: unknown },
   tabId?: number,
-  useWs = false
+  useWs = false,
+  contextId?: string
 ): Promise<Result> {
   try {
     const resp = useWs
-      ? await sendCommandWs(action, tabId)
-      : await sendCommand(action, tabId)
+      ? await sendCommandWs(action, tabId, contextId)
+      : await sendCommand(action, tabId, contextId)
     return unwrap(resp)
   } catch (err) {
     return { success: false, error: (err as Error).message }
@@ -30,7 +37,8 @@ async function send(
 
 export async function runOverride(
   filtered: string[],
-  opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number }
+  opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number; contextId?: string },
+  sender: OverrideSender = send
 ): Promise<void> {
   const sub = filtered[1]
 
@@ -40,7 +48,7 @@ export async function runOverride(
   }
 
   if (sub === "clear") {
-    const result = await send({ type: "clear_net_overrides" }, opts.globalTabId, opts.useWs)
+    const result = await sender({ type: "clear_net_overrides" }, opts.globalTabId, opts.useWs, opts.contextId)
     if (opts.jsonMode) {
       console.log(JSON.stringify(result, null, 2))
     } else if (result.success) {
@@ -74,7 +82,7 @@ export async function runOverride(
   }
 
   const rules = [{ urlPattern, queryAddOrReplace }]
-  const result = await send({ type: "set_net_overrides", rules }, opts.globalTabId, opts.useWs)
+  const result = await sender({ type: "set_net_overrides", rules }, opts.globalTabId, opts.useWs, opts.contextId)
 
   if (opts.jsonMode) {
     console.log(JSON.stringify(result, null, 2))

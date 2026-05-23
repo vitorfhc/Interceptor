@@ -20,6 +20,7 @@
  *   - Skips on non-Darwin (the runtime is macOS-only).
  *   - Skips when the `container` binary is absent (CI without macOS-26 +
  *     Apple's tool installed).
+ *   - Skips when the `container` system service is not running.
  *   - Skips when the `interceptor` binary isn't on $PATH (CI before the
  *     dist build runs). Will use `bun run cli/index.ts` as fallback if
  *     INTERCEPTOR_CLI is set to "bun".
@@ -34,9 +35,8 @@ const IS_DARWIN = process.platform === "darwin"
 const UBUNTU_IMAGE = "docker.io/library/ubuntu:24.04"
 const BUN_IMAGE = "docker.io/oven/bun:1"
 
-/** True iff Apple's `container` binary is on $PATH and responds to --version. */
-function containerAvailable(): boolean {
-  if (!IS_DARWIN) return false
+function containerBinary(): string | null {
+  if (!IS_DARWIN) return null
   // Mirror ContainerDomain.swift's resolution order (Apple-Silicon Homebrew first).
   const candidates = [
     "/opt/homebrew/bin/container",
@@ -44,13 +44,21 @@ function containerAvailable(): boolean {
   ]
   for (const path of candidates) {
     const probe = spawnSync(path, ["--version"], { stdio: "ignore" })
-    if (probe.status === 0) return true
+    if (probe.status === 0) return path
   }
   // Fallback: PATH lookup.
-  const which = spawnSync("which", ["container"], { stdio: "ignore" })
-  if (which.status !== 0) return false
+  const which = spawnSync("which", ["container"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  if (which.status !== 0) return null
   const probe = spawnSync("container", ["--version"], { stdio: "ignore" })
-  return probe.status === 0
+  return probe.status === 0 ? which.stdout.trim() || "container" : null
+}
+
+/** True iff Apple's `container` binary exists and its system service is running. */
+function containerAvailable(): boolean {
+  const binary = containerBinary()
+  if (!binary) return false
+  const status = spawnSync(binary, ["system", "status"], { stdio: "ignore" })
+  return status.status === 0
 }
 
 /**

@@ -365,7 +365,7 @@ Native (macOS Bridge — full install only):
   interceptor macos trust --microphone-prompt   Prompt only Microphone (only surface where Apple
                                                 exposes notDetermined / restricted).
 
-  PRD-66 — Personal data, distribution, and document domains:
+  Personal data, distribution, and document domains:
 
   Documents (no TCC):
   interceptor macos pdf info|text|outline|annotations|forms|images|find|attributes|permissions|annotate|strip|merge|split <path>

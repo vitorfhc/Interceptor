@@ -1,6 +1,6 @@
 {
   "name": "interceptor",
-  "version": "0.14.2",
+  "version": "0.15.1",
   "type": "module",
   "license": "Elastic-2.0",
   "bin": {

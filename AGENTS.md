@@ -28,7 +28,7 @@ Operating rules:
 - Prefer compound commands (`open`, `read`, `act`, `inspect`) over low-level verbs.
 - Prefer structured reads (DOM tree, AX tree, scene graph) over screenshots — see `.agents/skills/interceptor-browser/references/screenshot-policy.md` for budgets and the agent-default recipe.
 - Use the user's existing browser session. No clean profiles, no isolated automation contexts, no synthetic fingerprint profile unless the user asks for that.
-- When multiple browser profiles are connected, use `interceptor contexts` to list available context IDs and `--context <id>` to route a command to the right profile. Without `--context`, commands go to the most-recently connected extension.
+- When multiple browser profiles are connected, use `interceptor contexts` to list available context IDs and `--context <id>` to route a command to the right profile. Without `--context`, browser commands only auto-route when exactly one context is connected; zero or multiple contexts fail fast.
 - **Output is plain text by default** — that is the format the LLM consumes. Use `--json` only when piping into a script or another tool that needs a machine-parseable contract. Do not default to `--json` for your own context; structured JSON costs more tokens and reduces model comprehension on prose-trained models.
 - `eN` and framed refs like `e2_7` are short-lived. They survive transient layout flicker (CSS transitions, scroll, an ancestor briefly toggling `display`) but **not** navigation, rerender that recreates the node, or removal. If `act <ref>` returns "stale element," the element was removed from the DOM — re-run `read` or `find` for a fresh ref.
 - Prefer passive observation before invasive instrumentation. For network work, start with `inspect` or `net`, not CDP debugger attach.
@@ -89,7 +89,7 @@ Deep mechanic notes (the `userActivation` override + `__interceptor_trust` marke
 
 ## Repository Maintenance
 
-- This file is agent-facing. Keep it rule-shaped. No PRD numbers, no command catalogs, no deep mechanic explanations.
+- This file is agent-facing. Keep it rule-shaped. No internal planning IDs, no command catalogs, no deep mechanic explanations.
 - Per-task procedures live in `.agents/skills/*/Workflows/`. Reference content lives in `.agents/skills/*/references/`. Not here.
 - Update this file when an agent-facing **rule** changes, not when a CLI command is added or renamed (that's a `references/command-catalog.md` change).
 - Conventions for skills, frontmatter, sizes, and names are codified in `.agents/rules/README.md` and enforced in review.
