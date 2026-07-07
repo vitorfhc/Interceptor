@@ -272,6 +272,8 @@ interceptor eval --main "window.__APP_STATE__"
 
 Use only when no built-in command exposes what you need. On strict-CSP sites the first `eval --main` triggers an automatic reload/retry (the reactive CSP strip). To make page-origin JS run reliably up front — inline `<script>` injection, an XSS/PoC payload, repeated evals without the per-call reload dance — strip CSP explicitly first with `csp off` (below).
 
+**Hit `error: page CSP blocks eval`?** That is the *default ISOLATED world* being blocked by the **extension's own** content-script CSP (`script-src 'self' 'wasm-unsafe-eval'`, no `unsafe-eval`) — NOT the page's CSP, so `csp off` will not fix it. Add `--main` to run in the page world (where the page CSP applies, and the reactive strip / `csp off` handle it). Full playbook: `workflows/bypass-csp.md`.
+
 ## CSP (disable Content-Security-Policy)
 
 Browser-global toggle that removes CSP so injected page-origin JS runs even when `script-src` would block inline / `eval` code. Affects **every tab** — the ones already open and any opened later.

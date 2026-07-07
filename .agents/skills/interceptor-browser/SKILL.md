@@ -50,6 +50,7 @@ Each workflow is a complete self-contained "you are doing X" procedure. Open the
 | [`workflows/cook-in-canvas.md`](workflows/cook-in-canvas.md) | Draw effects/markers directly through a page's own `CanvasRenderingContext2D` (Docs/Excalidraw), pixel-verified |
 | [`workflows/cook-on-top-of-pages.md`](workflows/cook-on-top-of-pages.md) | "Cook" a live page in-place — banners, HUDs, overlays that track real DOM, full-screen takeovers, over the real session |
 | [`workflows/override-xhr.md`](workflows/override-xhr.md) | Mutate a request before it hits the server — change params, force a status, throttle |
+| [`workflows/bypass-csp.md`](workflows/bypass-csp.md) | Run JS a page's CSP blocks — `page CSP blocks eval`, injected inline/`eval`/PoC won't run; picks ISOLATED vs `--main`, diagnoses the real CSP, uses `csp off`, verifies at the header level |
 | [`workflows/capture-page-communication.md`](workflows/capture-page-communication.md) | Capture WebSocket, Beacon, and BroadcastChannel activity without CDP |
 | [`workflows/record-and-replay.md`](workflows/record-and-replay.md) | Learn a real user flow, export a replay plan, run it back |
 | [`workflows/screenshot-for-vlm.md`](workflows/screenshot-for-vlm.md) | Take a screenshot the model will actually understand — VLM-budgeted, WebP, on-disk |
