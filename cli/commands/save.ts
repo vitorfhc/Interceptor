@@ -4,43 +4,68 @@
 
 type Action = { type: string; [key: string]: unknown }
 
-function flagVal(args: string[], name: string): string | undefined {
-  const i = args.indexOf(name)
-  return i >= 0 ? args[i + 1] : undefined
-}
-
-// Flags that take a value (flag + the token after it are both consumed).
-const VALUE_FLAGS = new Set(["--out", "--chunk-size"])
-// Boolean flags that may survive global filtering and must never be folded into
-// the evaluated expression. (e.g. `save --out f "new Blob([])" --json` used to
-// concatenate `--json` into the code and fail with a postfix-operator error.)
-const BOOL_FLAGS = new Set(["--main", "--isolated", "--json", "--ws", "--no-ws", "--any-tab"])
-
 export function parseSaveCommand(filtered: string[]): Action {
-  const out = flagVal(filtered, "--out")
+  let out: string | undefined
+  let chunkSizeRaw: string | undefined
+  let world = "MAIN"
+  const codeParts: string[] = []
+
+  for (let i = 1; i < filtered.length; i++) {
+    const arg = filtered[i]
+    if (arg === "--") {
+      codeParts.push(...filtered.slice(i + 1))
+      break
+    }
+
+    const eq = arg.indexOf("=")
+    if (eq > 2) {
+      const name = arg.slice(0, eq)
+      const value = arg.slice(eq + 1)
+      if (name === "--out") {
+        out = value
+        continue
+      }
+      if (name === "--chunk-size") {
+        chunkSizeRaw = value
+        continue
+      }
+      if (name === "--timeout" || name === "--frame") {
+        continue
+      }
+    }
+
+    if (arg === "--out") {
+      out = filtered[i + 1]
+      if (i + 1 < filtered.length) i++
+      continue
+    }
+    if (arg === "--chunk-size") {
+      chunkSizeRaw = filtered[i + 1]
+      if (i + 1 < filtered.length) i++
+      continue
+    }
+    if (arg === "--timeout" || arg === "--frame") {
+      if (i + 1 < filtered.length) i++
+      continue
+    }
+    if (arg === "--isolated") {
+      world = "ISOLATED"
+      continue
+    }
+    if (arg === "--main" || arg === "--json" || arg === "--ws" || arg === "--no-ws" || arg === "--any-tab") {
+      continue
+    }
+
+    codeParts.push(arg)
+  }
+
   if (!out || out.startsWith("--")) {
     console.error("error: interceptor save requires --out <path>")
     process.exit(1)
   }
 
-  const chunkSizeRaw = flagVal(filtered, "--chunk-size")
   const chunkSize = chunkSizeRaw ? parseInt(chunkSizeRaw, 10) : undefined
-  const world = filtered.includes("--isolated") ? "ISOLATED" : "MAIN"
-
-  // Build the JS expression from everything that is NOT: index 0 (the `save`
-  // verb), a value-flag or its value, or a boolean flag. This keeps trailing
-  // flags out of the evaluated code regardless of their position.
-  const skip = new Set<number>([0])
-  filtered.forEach((arg, i) => {
-    if (VALUE_FLAGS.has(arg)) {
-      skip.add(i)
-      skip.add(i + 1)
-    }
-  })
-
-  const code = filtered
-    .filter((arg, index) => !skip.has(index) && !BOOL_FLAGS.has(arg) && !VALUE_FLAGS.has(arg))
-    .join(" ")
+  const code = codeParts.join(" ")
 
   if (!code.trim()) {
     console.error("error: interceptor save requires a JavaScript expression")

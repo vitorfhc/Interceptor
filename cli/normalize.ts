@@ -44,7 +44,6 @@ const NET = ["--filter", "--format", "--limit", "--out", "--since", "--pattern",
 const SCREENSHOT = ["--clip", "--element", "--filter", "--format", "--kind", "--limit", "--quality", "--ref", "--region", "--scale", "--selector", "--target-max-long-edge", "--threshold"]
 const DATA = ["--since"]
 const META = ["--css", "--frame-ids", "--since"]
-const SAVE = ["--out", "--chunk-size"]
 const BATCH = ["--timeout"]
 const MONITOR = ["--capture", "--format", "--guard-policy", "--instruction", "--mode", "--out", "--retention-policy", "--session", "--task", "--verifier-policy", "--persist-bodies"]
 const SCENE = ["--profile", "--slide", "--type"]
@@ -77,7 +76,9 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   attr: META, style: META, events: META, search: META, notify: META, sessions: META,
   capabilities: META, modals: META, panels: META,
   // singles
-  eval: [], save: SAVE, brand: [], group: [], batch: BATCH, raw: BATCH,
+  // eval/save accept free-form JavaScript. They parse raw argv themselves so
+  // code tokens, flag-looking strings, and -- terminator semantics are stable.
+  brand: [], group: [], batch: BATCH, raw: BATCH,
   monitor: MONITOR, scene: SCENE, sse: SSE, override: [], csp: [],
   upgrade: [], init: [], research: RESEARCH, extensions: [], contexts: [],
   skills: SKILLS, manifest: [],

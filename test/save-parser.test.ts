@@ -41,6 +41,24 @@ describe("parseSaveCommand", () => {
     expect(a.code).toBe("await fetch(u).then(r=>r.blob())")
   })
 
+  test("--timeout before --out is consumed without entering code", () => {
+    const a = parseSaveCommand(["save", "--timeout", "8000", "--out", "/tmp/f.bin", "new Blob([])"])
+    expect(a.out).toBe("/tmp/f.bin")
+    expect(a.code).toBe("new Blob([])")
+  })
+
+  test("--timeout after expression is consumed without entering code", () => {
+    const a = parseSaveCommand(["save", "--out", "/tmp/f.bin", "new Blob([])", "--timeout", "8000"])
+    expect(a.code).toBe("new Blob([])")
+  })
+
+  test("--out=<path> and --chunk-size=<n> forms are supported", () => {
+    const a = parseSaveCommand(["save", "--out=/tmp/f.bin", "--chunk-size=4096", "new Blob([])"])
+    expect(a.out).toBe("/tmp/f.bin")
+    expect(a.chunkSize).toBe(4096)
+    expect(a.code).toBe("new Blob([])")
+  })
+
   test("requires --out explicitly (no silent positional fallback)", () => {
     const exit = spyOn(process, "exit").mockImplementation(((): never => { throw new Error("exit") }))
     const err = spyOn(console, "error").mockImplementation(() => {})

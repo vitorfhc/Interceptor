@@ -89,4 +89,22 @@ describe("normalizeArgs", () => {
     expect(normalizeArgs(["find", "--role", "button", "submit", "order"]))
       .toEqual(["find", "submit", "order", "--role", "button"])
   })
+
+  test("eval argv passes through untouched so JavaScript token order is preserved", () => {
+    expect(normalizeArgs(["eval", "--timeout", "8000", "--main", "1+1"]))
+      .toEqual(["eval", "--timeout", "8000", "--main", "1+1"])
+    expect(normalizeArgs(["eval", "1+1", "--timeout", "8000"]))
+      .toEqual(["eval", "1+1", "--timeout", "8000"])
+    expect(normalizeArgs(["eval", "--main", "--", "--timeout", "8000"]))
+      .toEqual(["eval", "--main", "--", "--timeout", "8000"])
+  })
+
+  test("save argv passes through untouched so JavaScript token order is preserved", () => {
+    expect(normalizeArgs(["save", "--timeout", "8000", "--out", "/tmp/f.bin", "new Blob([])"]))
+      .toEqual(["save", "--timeout", "8000", "--out", "/tmp/f.bin", "new Blob([])"])
+    expect(normalizeArgs(["save", "new Blob([])", "--timeout", "8000", "--out", "/tmp/f.bin"]))
+      .toEqual(["save", "new Blob([])", "--timeout", "8000", "--out", "/tmp/f.bin"])
+    expect(normalizeArgs(["save", "--out", "/tmp/f.bin", "--", "--timeout", "8000"]))
+      .toEqual(["save", "--out", "/tmp/f.bin", "--", "--timeout", "8000"])
+  })
 })
