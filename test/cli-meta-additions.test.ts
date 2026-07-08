@@ -39,6 +39,16 @@ function runCli(args: string[]): { stdout: string; stderr: string; status: numbe
 }
 
 describe("rewriteCspEvalError (#54)", () => {
+  test("uses user-scripts toggle guidance when the extension reports user scripts unavailable", () => {
+    const raw =
+      "Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source of script in the following Content Security Policy directive: \"script-src 'self'\"."
+    const out = rewriteCspEvalError(raw, { reason: "user_scripts_disabled" })
+    expect(out).toBe(
+      'eval can\'t run: at chrome://extensions → Interceptor → Details, enable "Allow user scripts" (Developer mode on), then retry.'
+    )
+    expect(out).not.toContain("page CSP blocks eval")
+  })
+
   test("rewrites a Chrome unsafe-eval CSP error into the actionable message", () => {
     const raw =
       "Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source of script in the following Content Security Policy directive: \"script-src 'self'\"."

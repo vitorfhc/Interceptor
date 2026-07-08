@@ -2,12 +2,25 @@
  * cli/format.ts — output formatting helpers
  */
 
+const USER_SCRIPTS_DISABLED_REASON = "user_scripts_disabled"
+const USER_SCRIPTS_DISABLED_EVAL_MESSAGE =
+  'eval can\'t run: at chrome://extensions → Interceptor → Details, enable "Allow user scripts" (Developer mode on), then retry.'
+
+function hasUserScriptsDisabledSignal(data: unknown): boolean {
+  return Boolean(
+    data &&
+      typeof data === "object" &&
+      (data as { reason?: unknown }).reason === USER_SCRIPTS_DISABLED_REASON
+  )
+}
+
 // Replace CSP-blocked-eval errors with an actionable structured message and
-// strip the leaked chrome-extension://<id> URL. Sites with strict CSPs that
-// block unsafe-eval (LinkedIn, github.com, banking portals, most SaaS
-// dashboards) hit this path routinely; the raw Chrome error is verbose and
-// gives no guidance.
-export function rewriteCspEvalError(raw: string | undefined): string | undefined {
+// strip the leaked chrome-extension://<id> URL. A userScripts-disabled signal
+// wins first; unflagged CSP failures keep the legacy page-CSP guidance.
+export function rewriteCspEvalError(raw: string | undefined, data?: unknown): string | undefined {
+  // When the extension reports this reason, the CSP-looking fallback failure is
+  // caused by Chrome's per-extension userScripts toggle being disabled.
+  if (hasUserScriptsDisabledSignal(data)) return USER_SCRIPTS_DISABLED_EVAL_MESSAGE
   if (!raw) return raw
   const cspPatterns = [
     /content security policy.*(?:script-src|unsafe-eval|eval)/i,
@@ -52,7 +65,7 @@ export function formatResult(result: { success: boolean; error?: string; data?: 
   if (jsonMode) return JSON.stringify(result, null, 2)
 
   if (!result.success) {
-    const cleaned = rewriteCspEvalError(result.error)
+    const cleaned = rewriteCspEvalError(result.error, result.data)
     return `error: ${cleaned}`
   }
   if (result.data === undefined || result.data === null) return "ok"

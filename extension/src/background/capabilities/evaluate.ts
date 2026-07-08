@@ -3,6 +3,7 @@ import { waitForTabLoad } from "../content-bridge"
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
 const CSP_BYPASS_RULE_ID_BASE = 910_000
+const USER_SCRIPTS_DISABLED_REASON = "user_scripts_disabled"
 
 export function isTrustedTypesError(error: string | undefined): boolean {
   if (!error) return false
@@ -19,6 +20,25 @@ export function isCspUnsafeEvalError(error: string | undefined): boolean {
 export function isCspEvalError(error: string | undefined): boolean {
   if (!error) return false
   return isTrustedTypesError(error) || isCspUnsafeEvalError(error)
+}
+
+function dataStringField(data: unknown, field: string): string | undefined {
+  if (!data || typeof data !== "object") return undefined
+  const value = (data as Record<string, unknown>)[field]
+  return typeof value === "string" ? value : undefined
+}
+
+function resultHasCspEvalError(result: ActionResult): boolean {
+  return isCspEvalError(result.error) || isCspEvalError(dataStringField(result.data, "originalError"))
+}
+
+function withUserScriptsDisabledReason(result: ActionResult): ActionResult {
+  const data = result.data && typeof result.data === "object" && !Array.isArray(result.data)
+    ? { ...(result.data as Record<string, unknown>) }
+    : {}
+  if (!data.originalError && result.error) data.originalError = result.error
+  data.reason = USER_SCRIPTS_DISABLED_REASON
+  return { ...result, data }
 }
 
 export function buildCspBypassRule(tabId: number): chrome.declarativeNetRequest.Rule {
@@ -228,6 +248,7 @@ export async function handleEvaluateActions(
   const world = (action.world as string) === "ISOLATED" ? "ISOLATED" : "MAIN"
   const initialUserScriptWorld = world === "MAIN" ? "MAIN" : "USER_SCRIPT"
   const userScriptAttempt = await executeWithUserScripts(tabId, initialUserScriptWorld, code)
+  let userScriptsUnavailable = !userScriptAttempt.available
   if (userScriptAttempt.available) {
     if (
       !userScriptAttempt.result?.success &&
@@ -241,6 +262,7 @@ export async function handleEvaluateActions(
       ) {
         return fallback.result ?? { success: false, error: "no result" }
       }
+      if (!fallback.available) userScriptsUnavailable = true
       // userScripts could not beat the page's CSP / Trusted-Types either — fall
       // through to the executeEval CSP-strip bypass + reload path below.
     } else {
@@ -251,9 +273,13 @@ export async function handleEvaluateActions(
   // runWithCspStripBypass core (see above) so `evaluate` and the binary sink
   // share one bypass implementation. The userScripts attempt above remains
   // evaluate-specific.
-  return runWithCspStripBypass(
+  const fallbackResult = await runWithCspStripBypass(
     tabId,
     world as "MAIN" | "ISOLATED",
     (t, w) => executeEval(t, w, code)
   )
+  if (userScriptsUnavailable && !fallbackResult.success && resultHasCspEvalError(fallbackResult)) {
+    return withUserScriptsDisabledReason(fallbackResult)
+  }
+  return fallbackResult
 }
